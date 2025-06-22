@@ -17,6 +17,13 @@ package messages
 // 	NewState interface{}
 // }
 
+// UpdateWorldState is sent to a WorldManagerActor to update some world state
+type UpdateWorldState struct {
+	RegionID string
+	NewState interface{}
+	Data     interface{} // Additional data for the world state update
+}
+
 // Example: Message to initiate combat between two entities
 // type InitiateCombat struct {
 //  AttackerID string

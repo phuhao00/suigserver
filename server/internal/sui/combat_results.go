@@ -3,7 +3,8 @@ package sui
 import (
 	"encoding/json"
 	"fmt"
-	// "log" // Will be replaced by utils
+	"log"
+
 	"github.com/block-vision/sui-go-sdk/models"
 	"github.com/phuhao00/suigserver/server/internal/utils" // For logging
 	// "github.com/phuhao00/suigserver/server/internal/game" // For CombatResult struct if needed
@@ -33,10 +34,10 @@ type CombatResultsSuiService struct {
 func NewCombatResultsSuiService(suiClient *SuiClient, packageID, moduleName, senderAddress, gasObjectID string) *CombatResultsSuiService {
 	utils.LogInfo("Initializing Combat Results Sui Service...")
 	if suiClient == nil {
-		utils.LogPanic("CombatResultsSuiService: SuiClient cannot be nil")
+		log.Panic("CombatResultsSuiService: SuiClient cannot be nil")
 	}
 	if packageID == "" || moduleName == "" || senderAddress == "" || gasObjectID == "" {
-		utils.LogPanic("CombatResultsSuiService: packageID, moduleName, senderAddress, and gasObjectID must be provided.")
+		log.Panic("CombatResultsSuiService: packageID, moduleName, senderAddress, and gasObjectID must be provided.")
 	}
 	return &CombatResultsSuiService{
 		suiClient:     suiClient,
@@ -50,7 +51,7 @@ func NewCombatResultsSuiService(suiClient *SuiClient, packageID, moduleName, sen
 // RecordCombatOutcome records the result of a combat encounter on the blockchain.
 // It prepares and returns the transaction bytes. The actual signing and execution
 // should be handled by the caller or a higher-level service.
-func (s *CombatResultsSuiService) RecordCombatOutcome(data CombatResultData, gasBudget uint64) (models.TransactionBlockResponse, error) {
+func (s *CombatResultsSuiService) RecordCombatOutcome(data CombatResultData, gasBudget uint64) (models.TxnMetaData, error) {
 	functionName := "record_combat_outcome" // Name of the Move function
 	utils.LogInfof("CombatResultsSuiService: Preparing to record combat outcome for log %s: Winner %s, Loser %s. Package: %s, Module: %s, Function: %s, GasBudget: %d, GasObject: %s",
 		data.CombatLogID, data.WinnerAddress, data.LoserAddress, s.packageID, s.moduleName, functionName, gasBudget, s.gasObjectID)
@@ -60,12 +61,12 @@ func (s *CombatResultsSuiService) RecordCombatOutcome(data CombatResultData, gas
 	rewardsJSON, err := json.Marshal(data.Rewards)
 	if err != nil {
 		utils.LogErrorf("CombatResultsSuiService: Failed to marshal rewards to JSON for combat log %s: %v", data.CombatLogID, err)
-		return models.TransactionBlockResponse{}, fmt.Errorf("failed to marshal rewards to JSON: %w", err)
+		return models.TxnMetaData{}, fmt.Errorf("failed to marshal rewards to JSON: %w", err)
 	}
 	additionalDataJSON, err := json.Marshal(data.AdditionalData)
 	if err != nil {
 		utils.LogErrorf("CombatResultsSuiService: Failed to marshal additionalData to JSON for combat log %s: %v", data.CombatLogID, err)
-		return models.TransactionBlockResponse{}, fmt.Errorf("failed to marshal additionalData to JSON: %w", err)
+		return models.TxnMetaData{}, fmt.Errorf("failed to marshal additionalData to JSON: %w", err)
 	}
 
 	callArgs := []interface{}{
@@ -90,7 +91,7 @@ func (s *CombatResultsSuiService) RecordCombatOutcome(data CombatResultData, gas
 
 	if err != nil {
 		utils.LogErrorf("CombatResultsSuiService: Error preparing transaction for RecordCombatOutcome (log %s): %v", data.CombatLogID, err)
-		return models.TransactionBlockResponse{}, fmt.Errorf("MoveCall failed for RecordCombatOutcome (log %s): %w", data.CombatLogID, err)
+		return models.TxnMetaData{}, fmt.Errorf("MoveCall failed for RecordCombatOutcome (log %s): %w", data.CombatLogID, err)
 	}
 
 	utils.LogInfof("CombatResultsSuiService: Transaction prepared for RecordCombatOutcome (log %s). TxBytes: %s",

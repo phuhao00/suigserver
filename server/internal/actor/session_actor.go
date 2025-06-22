@@ -4,17 +4,17 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+
 	// "log" // Replaced by utils.LogX
-	"net"
-	"strings" // For basic message parsing, will be replaced by proper protocol
-	"time"    // For heartbeat
+	"net"  // For basic message parsing, will be replaced by proper protocol
+	"time" // For heartbeat
 
 	"github.com/asynkron/protoactor-go/actor"
-	"github.com/block-vision/sui-go-sdk/models"             // For SUI SDK types
+	"github.com/block-vision/sui-go-sdk/models" // For SUI SDK types
 	"github.com/phuhao00/suigserver/server/internal/actor/messages"
-	"github.com/phuhao00/suigserver/server/internal/network" // For protocol definitions
-	"github.com/phuhao00/suigserver/server/internal/sui"    // For SUI client
-	"github.com/phuhao00/suigserver/server/internal/utils"  // Logger
+	"github.com/phuhao00/suigserver/server/internal/protocol" // For protocol definitions
+	"github.com/phuhao00/suigserver/server/internal/sui"      // For SUI client
+	"github.com/phuhao00/suigserver/server/internal/utils"    // Logger
 )
 
 // PlayerSessionActor manages a single client's connection and game session.
@@ -32,7 +32,7 @@ type PlayerSessionActor struct {
 	dummyPlayerID   string
 	// other player-specific state
 
-	lastActivity    time.Time // Time of last message from client or significant activity
+	lastActivity    time.Time     // Time of last message from client or significant activity
 	heartbeatStopCh chan struct{} // Channel to stop heartbeat goroutine (if any server-side ping)
 }
 
@@ -65,9 +65,9 @@ func NewPlayerSessionActor(
 	}
 }
 
-// Props creates actor.Props for a PlayerSessionActor.
+// PropsForPlayerSession creates actor.Props for a PlayerSessionActor.
 // It's a helper to ensure all necessary dependencies are passed for actor creation.
-func Props(
+func PropsForPlayerSession(
 	system *actor.ActorSystem,
 	roomManagerPID *actor.PID,
 	worldManagerPID *actor.PID,
@@ -91,9 +91,9 @@ const (
 // TODO: These constants (placeholder...PackageID, placeholder...Module) should be made properly configurable
 // via the main config file and passed down to PlayerSessionActor. This is part of the
 // "Configuration for New SUI Placeholders" step (Step 4) of the "Server & SUI Logic Enhancement - Phase 2" plan.
-const placeholderGameLogicPackageID = "0xPLACEHOLDER_GAME_LOGIC_PACKAGE_ID" // Used for PERFORM_INGAME_ACTION
+const placeholderGameLogicPackageID = "0xPLACEHOLDER_GAME_LOGIC_PACKAGE_ID"       // Used for PERFORM_INGAME_ACTION
 const placeholderPlayerObjectPackageID = "0xPLACEHOLDER_PLAYER_OBJECT_PACKAGE_ID" // Used for GET_PLAYER_PROFILE
-const placeholderPlayerObjectModule = "player_profile"                     // Used for GET_PLAYER_PROFILE
+const placeholderPlayerObjectModule = "player_profile"                            // Used for GET_PLAYER_PROFILE
 
 // Receive is the main message handling loop for the PlayerSessionActor.
 func (a *PlayerSessionActor) Receive(ctx actor.Context) {
@@ -218,18 +218,17 @@ func (a *PlayerSessionActor) Receive(ctx actor.Context) {
 
 		// Send JSON response to client
 		if success {
-			a.sendResponse(network.MsgTypeAuthResponse, network.AuthResponsePayload{
+			a.sendResponse(protocol.MsgTypeAuthResponse, protocol.AuthResponsePayload{
 				PlayerID: a.playerID, // PlayerID is now set on 'a'
 				Success:  true,
 				Message:  "Authentication successful.",
 			})
 		} else {
-			a.sendResponse(network.MsgTypeAuthResponse, network.AuthResponsePayload{
+			a.sendResponse(protocol.MsgTypeAuthResponse, protocol.AuthResponsePayload{
 				Success: false,
 				Message: "Authentication failed. Invalid token or authentication method disabled.",
 			})
 		}
-
 
 	case *messages.FindRoomResponse: // Response from RoomManagerActor
 		utils.LogInfof("[%s] Player %s received FindRoomResponse: Found=%t, RoomID=%s, RoomPID=%s, Error=%s",
@@ -247,7 +246,7 @@ func (a *PlayerSessionActor) Receive(ctx actor.Context) {
 			} else if !msg.Found {
 				responseMessage = "Room not found for the given criteria."
 			}
-			a.sendResponse(network.MsgTypeJoinRoomResponse, network.JoinRoomResponsePayload{
+			a.sendResponse(protocol.MsgTypeJoinRoomResponse, protocol.JoinRoomResponsePayload{
 				Success: false,
 				Message: responseMessage,
 			})
@@ -257,14 +256,14 @@ func (a *PlayerSessionActor) Receive(ctx actor.Context) {
 		if msg.Success {
 			a.roomPID = ctx.Sender() // Assume sender is the RoomActor
 			utils.LogInfof("[%s] Player %s successfully joined room %s (RoomActor PID: %s)", actorID, a.playerID, msg.RoomID, a.roomPID.Id)
-			a.sendResponse(network.MsgTypeJoinRoomResponse, network.JoinRoomResponsePayload{
+			a.sendResponse(protocol.MsgTypeJoinRoomResponse, protocol.JoinRoomResponsePayload{
 				Success: true,
 				RoomID:  msg.RoomID,
 				Message: "Successfully joined room: " + msg.RoomID,
 			})
 		} else {
 			utils.LogWarnf("[%s] Player %s failed to join room %s: %s", actorID, a.playerID, msg.RoomID, msg.Error)
-			a.sendResponse(network.MsgTypeJoinRoomResponse, network.JoinRoomResponsePayload{
+			a.sendResponse(protocol.MsgTypeJoinRoomResponse, protocol.JoinRoomResponsePayload{
 				Success: false,
 				RoomID:  msg.RoomID,
 				Message: "Failed to join room " + msg.RoomID + ": " + msg.Error,
@@ -272,11 +271,11 @@ func (a *PlayerSessionActor) Receive(ctx actor.Context) {
 		}
 
 	case *messages.RoomChatMessage: // Received from a RoomActor to be forwarded to this client
-		chatPayload := network.ChatMessagePayload{
+		chatPayload := protocol.ChatMessagePayload{
 			SenderName: msg.SenderName,
 			Text:       msg.Message,
 		}
-		a.sendResponse(network.MsgTypeNewChatMessage, chatPayload)
+		a.sendResponse(protocol.MsgTypeNewChatMessage, chatPayload)
 
 	default:
 		utils.LogWarnf("[%s] PlayerSessionActor %s received unknown message type %T: %+v", actorID, a.playerID, msg, msg)
@@ -303,7 +302,7 @@ func (a *PlayerSessionActor) cleanupResources(ctx actor.Context) {
 // handleClientPayload parses the raw payload from the client and decides what to do.
 func (a *PlayerSessionActor) handleClientPayload(ctx actor.Context, rawPayload []byte) {
 	actorID := ctx.Self().Id
-	var msg network.ClientServerMessage
+	var msg protocol.ClientServerMessage
 	if err := json.Unmarshal(rawPayload, &msg); err != nil {
 		utils.LogWarnf("[%s] Player %s: Error unmarshaling client message: %v. Payload: '%s'", actorID, a.playerID, err, string(rawPayload))
 		a.sendErrorResponse("INVALID_JSON", "Message is not valid JSON.")
@@ -326,13 +325,13 @@ func (a *PlayerSessionActor) handleClientPayload(ctx actor.Context, rawPayload [
 	}
 
 	switch msg.Type {
-	case network.MsgTypeAuthRequest:
+	case protocol.MsgTypeAuthRequest:
 		if a.isAuthenticated() {
 			utils.LogWarnf("[%s] Player %s: Already authenticated, received another AUTH request.", actorID, a.playerID)
 			a.sendErrorResponse("ALREADY_AUTHENTICATED", "You are already authenticated.")
 			return
 		}
-		var authReqPayload network.AuthRequestPayload
+		var authReqPayload protocol.AuthRequestPayload
 		payloadBytes, _ := json.Marshal(msg.Payload)
 		if err := json.Unmarshal(payloadBytes, &authReqPayload); err != nil {
 			utils.LogWarnf("[%s] Player (no ID yet): Invalid AUTH payload structure: %v", actorID, err)
@@ -346,12 +345,12 @@ func (a *PlayerSessionActor) handleClientPayload(ctx actor.Context, rawPayload [
 		}
 		ctx.Request(ctx.Self(), authInternalMsg)
 
-	case network.MsgTypeJoinRoomRequest:
+	case protocol.MsgTypeJoinRoomRequest:
 		if !a.isAuthenticated() {
 			a.sendErrorResponse("NOT_AUTHENTICATED", "Please authenticate first.")
 			return
 		}
-		var joinReqPayload network.JoinRoomRequestPayload
+		var joinReqPayload protocol.JoinRoomRequestPayload
 		payloadBytes, _ := json.Marshal(msg.Payload)
 		if err := json.Unmarshal(payloadBytes, &joinReqPayload); err != nil {
 			utils.LogWarnf("[%s] Player %s: Invalid JOIN_ROOM payload: %v", actorID, a.playerID, err)
@@ -368,7 +367,7 @@ func (a *PlayerSessionActor) handleClientPayload(ctx actor.Context, rawPayload [
 		utils.LogInfof("[%s] Player %s attempting to find and join room with criteria: '%s'", actorID, a.playerID, joinReqPayload.Criteria)
 		if a.roomManagerPID == nil {
 			utils.LogErrorf("[%s] Player %s: RoomManagerPID not configured. Cannot join room.", actorID, a.playerID)
-			a.sendResponse(network.MsgTypeJoinRoomResponse, network.JoinRoomResponsePayload{
+			a.sendResponse(protocol.MsgTypeJoinRoomResponse, protocol.JoinRoomResponsePayload{
 				Success: false,
 				Message: "Error: Room manager is not available.",
 			})
@@ -381,7 +380,7 @@ func (a *PlayerSessionActor) handleClientPayload(ctx actor.Context, rawPayload [
 		})
 		a.sendSimpleMessage(fmt.Sprintf("Attempting to find and join room '%s'...", joinReqPayload.Criteria))
 
-	case network.MsgTypeSendChat:
+	case protocol.MsgTypeSendChat:
 		if !a.isAuthenticated() {
 			a.sendErrorResponse("NOT_AUTHENTICATED", "Please authenticate first.")
 			return
@@ -390,7 +389,7 @@ func (a *PlayerSessionActor) handleClientPayload(ctx actor.Context, rawPayload [
 			a.sendErrorResponse("NOT_IN_A_ROOM", "You are not in a room. Join a room first.")
 			return
 		}
-		var chatReqPayload network.ChatMessagePayload
+		var chatReqPayload protocol.ChatMessagePayload
 		payloadBytes, _ := json.Marshal(msg.Payload)
 		if err := json.Unmarshal(payloadBytes, &chatReqPayload); err != nil {
 			utils.LogWarnf("[%s] Player %s: Invalid SEND_CHAT payload: %v", actorID, a.playerID, err)
@@ -413,21 +412,21 @@ func (a *PlayerSessionActor) handleClientPayload(ctx actor.Context, rawPayload [
 			ActualMessage: roomChatMessageInternal,
 		})
 
-	case network.MsgTypePing:
+	case protocol.MsgTypePing:
 		utils.LogDebugf("[%s] Player %s received PING.", actorID, a.playerID)
-		var pingPayload network.PingPongPayload
+		var pingPayload protocol.PingPongPayload
 		payloadBytes, _ := json.Marshal(msg.Payload)
 		if err := json.Unmarshal(payloadBytes, &pingPayload); err != nil {
 			utils.LogWarnf("[%s] Player %s: PING payload malformed: %v", actorID, a.playerID, err)
 		}
-		a.sendResponse(network.MsgTypePong, pingPayload)
+		a.sendResponse(protocol.MsgTypePong, pingPayload)
 
-	case network.MsgTypePlayerAction:
+	case protocol.MsgTypePlayerAction:
 		if !a.isAuthenticated() {
 			a.sendErrorResponse("NOT_AUTHENTICATED", "Please authenticate first.")
 			return
 		}
-		var actionPayload network.PlayerActionPayload
+		var actionPayload protocol.PlayerActionPayload
 		payloadBytes, _ := json.Marshal(msg.Payload)
 		if err := json.Unmarshal(payloadBytes, &actionPayload); err != nil {
 			utils.LogWarnf("[%s] Player %s: Invalid PLAYER_ACTION payload: %v", actorID, a.playerID, err)
@@ -453,40 +452,41 @@ func (a *PlayerSessionActor) handleClientPayload(ctx actor.Context, rawPayload [
 			// This demonstrates how the server would interact with the SDK types.
 			mockSuiObjectData := models.SuiObjectData{
 				ObjectId: simulatedPlayerSuiObjectID,
-				Version:  1,
+				Version:  "1",
 				Digest:   "SIMULATED_OBJECT_DIGEST",
 				Type:     fmt.Sprintf("%s::%s::%s", placeholderPlayerObjectPackageID, placeholderPlayerObjectModule, playerObjectStructName),
-				Owner:    &models.ObjectOwner{AddressOwner: &a.playerID}, // Assuming player owns their profile object
+				Owner:    &models.ObjectOwner{AddressOwner: a.playerID}, // Assuming player owns their profile object
 				Content: &models.SuiParsedData{
 					DataType: "moveObject",
-					Type:     fmt.Sprintf("%s::%s::%s", placeholderPlayerObjectPackageID, placeholderPlayerObjectModule, playerObjectStructName),
-					HasPublicTransfer: true,
-					Fields: map[string]interface{}{ // These are the SUI object's fields
-						"game_player_id": a.playerID, // Field storing the link to the game's internal player ID
-						"name":           fmt.Sprintf("Player %s", a.playerID),
-						"level":          uint64(15), // Example: SUI often uses u64 for numbers
-						"xp":             uint64(5500),
-						"health_points":  uint64(120),
-						"attack_power":   uint64(25),
-						"last_seen_tsms": uint64(time.Now().UnixMilli()), // Example timestamp
-					},
+					// Note: Fields structure may vary - using a generic approach
 				},
+			}
+
+			// Simulated player data fields that would normally be in the Content.Fields
+			simulatedFields := map[string]interface{}{ // These are the SUI object's fields
+				"game_player_id": a.playerID, // Field storing the link to the game's internal player ID
+				"name":           fmt.Sprintf("Player %s", a.playerID),
+				"level":          uint64(15), // Example: SUI often uses u64 for numbers
+				"xp":             uint64(5500),
+				"health_points":  uint64(120),
+				"attack_power":   uint64(25),
+				"last_seen_tsms": uint64(time.Now().UnixMilli()), // Example timestamp
 			}
 			// In a real call: suiObjectResponse, err := a.suiClient.GetObject(context.Background(), simulatedPlayerSuiObjectID)
 			// Then check err and process suiObjectResponse.
 
 			// "Parse" the simulated SUI response to populate the data for the client.
 			var clientResponseData map[string]interface{}
-			if mockSuiObjectData.Content != nil && mockSuiObjectData.Content.Fields != nil {
-				suiFields := mockSuiObjectData.Content.Fields
+			if mockSuiObjectData.Content != nil {
+				// Use the simulated fields since actual SDK fields structure varies
 				clientResponseData = map[string]interface{}{
-					"playerId":    suiFields["game_player_id"],
-					"name":        suiFields["name"],
-					"level":       suiFields["level"],
-					"xp":          suiFields["xp"],
-					"hp":          suiFields["health_points"],
-					"atk":         suiFields["attack_power"],
-					"lastSeenMs":  suiFields["last_seen_tsms"],
+					"playerId":    simulatedFields["game_player_id"],
+					"name":        simulatedFields["name"],
+					"level":       simulatedFields["level"],
+					"xp":          simulatedFields["xp"],
+					"hp":          simulatedFields["health_points"],
+					"atk":         simulatedFields["attack_power"],
+					"lastSeenMs":  simulatedFields["last_seen_tsms"],
 					"suiObjectId": mockSuiObjectData.ObjectId,
 					"suiVersion":  mockSuiObjectData.Version,
 				}
@@ -496,7 +496,7 @@ func (a *PlayerSessionActor) handleClientPayload(ctx actor.Context, rawPayload [
 				clientResponseData = map[string]interface{}{"error": "Failed to retrieve or parse player SUI data (simulated)."}
 			}
 
-			a.sendResponse(network.MsgTypePlayerActionResponse, network.PlayerActionResponsePayload{
+			a.sendResponse(protocol.MsgTypePlayerActionResponse, protocol.PlayerActionResponsePayload{
 				ActionType: actionPayload.ActionType,
 				Status:     "SIMULATED_SUI_GET_OBJECT_SUCCESS",
 				Message:    "Player profile data retrieved (simulated SUI GetObject).",
@@ -516,7 +516,7 @@ func (a *PlayerSessionActor) handleClientPayload(ctx actor.Context, rawPayload [
 			if !okActionName || !okActionParams {
 				utils.LogWarnf("[%s] Player %s: PERFORM_INGAME_ACTION payload malformed. Expected 'action_name' (string) and 'action_params' (map). Payload: %+v",
 					actorID, a.playerID, actionPayload.Data)
-				a.sendResponse(network.MsgTypePlayerActionResponse, network.PlayerActionResponsePayload{
+				a.sendResponse(protocol.MsgTypePlayerActionResponse, protocol.PlayerActionResponsePayload{
 					ActionType: actionPayload.ActionType,
 					Status:     "INVALID_ACTION_DATA",
 					Message:    "Action data is malformed. Expected 'action_name' and 'action_params'.",
@@ -545,7 +545,7 @@ func (a *PlayerSessionActor) handleClientPayload(ctx actor.Context, rawPayload [
 
 			// Simulate gas details
 			gasObjectID := "0xSIMULATED_GAS_COIN_ID" // Placeholder
-			gasBudget := uint64(10000000)          // Example
+			gasBudget := uint64(10000000)            // Example
 
 			utils.LogInfof(
 				"[%s] Player %s: SIMULATING SUI MoveCall: PackageID=%s, Module=%s, Function=%s, TypeArgs=%v, Args=%v, GasObj=%s, GasBudget=%d",
@@ -554,7 +554,7 @@ func (a *PlayerSessionActor) handleClientPayload(ctx actor.Context, rawPayload [
 
 			// Simulate the response from suiClient.MoveCall (which prepares the transaction bytes)
 			mockTxBytes := fmt.Sprintf("SIMULATED_TX_BYTES_FOR_%s_ACTION_%s", a.playerID, actionName)
-			simulatedMoveCallResponse := models.TransactionBlockResponse{
+			simulatedMoveCallResponse := models.TxnMetaData{
 				TxBytes: mockTxBytes,
 				// Other fields like GasUsed, Effects, etc., would be populated after execution.
 				// For a `SuiMoveCall` (dry run or build-only), TxBytes is the primary output.
@@ -579,7 +579,7 @@ func (a *PlayerSessionActor) handleClientPayload(ctx actor.Context, rawPayload [
 			utils.LogInfof("[%s] Player %s: Final conceptual step: ExecuteTransactionBlock with TxBytes and signature(s).",
 				actorID, a.playerID)
 
-			a.sendResponse(network.MsgTypePlayerActionResponse, network.PlayerActionResponsePayload{
+			a.sendResponse(protocol.MsgTypePlayerActionResponse, protocol.PlayerActionResponsePayload{
 				ActionType: actionPayload.ActionType,
 				Status:     "SIMULATED_SUI_MOVE_CALL_PREPARED",
 				Message:    "In-game action prepared for SUI execution (simulated).",
@@ -587,7 +587,7 @@ func (a *PlayerSessionActor) handleClientPayload(ctx actor.Context, rawPayload [
 			})
 		default:
 			utils.LogWarnf("[%s] Player %s: Received unknown PLAYER_ACTION type: %s", actorID, a.playerID, actionPayload.ActionType)
-			a.sendResponse(network.MsgTypePlayerActionResponse, network.PlayerActionResponsePayload{
+			a.sendResponse(protocol.MsgTypePlayerActionResponse, protocol.PlayerActionResponsePayload{
 				ActionType: actionPayload.ActionType,
 				Status:     "UNKNOWN_ACTION_TYPE",
 				Message:    "Server does not understand this player action type.",
@@ -599,32 +599,6 @@ func (a *PlayerSessionActor) handleClientPayload(ctx actor.Context, rawPayload [
 		a.sendErrorResponse("UNKNOWN_COMMAND", fmt.Sprintf("Unknown command type: %s", msg.Type))
 	}
 
-}
-			return
-		}
-		if a.roomPID == nil {
-			a.sendSimpleMessage("Error: Not in a room. Use 'join <room_id>'.")
-			return
-		}
-		if len(parts) > 1 {
-			chatMessage := strings.Join(parts[1:], " ")
-			roomChatMessage := &messages.RoomChatMessage{
-				SenderID:   a.playerID,
-				SenderName: a.playerID,
-				Message:    chatMessage,
-			}
-			ctx.Send(a.roomPID, &messages.BroadcastToRoom{
-				SenderPID:     ctx.Self(),
-				ActualMessage: roomChatMessage,
-			})
-		} else {
-			a.sendSimpleMessage("Usage: say <message>")
-		}
-	case "ping":
-		log.Printf("[%s] Received 'ping' from client %s (OLD PARSER).", ctx.Self().Id, a.playerID)
-		a.sendSimpleMessage("PONG")
-
-	}
 }
 
 // handleForwardToClient sends a message payload to the connected client.
@@ -652,18 +626,18 @@ func (a *PlayerSessionActor) handleForwardToClient(msg *messages.ForwardToClient
 
 // sendResponse constructs and sends a standard JSON message to the client.
 func (a *PlayerSessionActor) sendResponse(msgType string, payload interface{}) {
-	response := network.ClientServerMessage{
+	response := protocol.ClientServerMessage{
 		Type:    msgType,
 		Payload: payload,
 	}
 	jsonResponse, err := json.Marshal(response)
 	if err != nil {
 		utils.LogErrorf("PlayerSessionActor %s: Error marshaling response type %s: %v", a.playerID, msgType, err)
-		errorPayload := network.ErrorResponsePayload{
+		errorPayload := protocol.ErrorResponsePayload{
 			Code:    "INTERNAL_SERVER_ERROR",
 			Message: "Error creating response: " + err.Error(),
 		}
-		fallbackResponse := network.ClientServerMessage{Type: network.MsgTypeError, Payload: errorPayload}
+		fallbackResponse := protocol.ClientServerMessage{Type: protocol.MsgTypeError, Payload: errorPayload}
 		jsonFallback, _ := json.Marshal(fallbackResponse)
 		a.handleForwardToClient(&messages.ForwardToClient{Payload: jsonFallback})
 		return
@@ -673,19 +647,19 @@ func (a *PlayerSessionActor) sendResponse(msgType string, payload interface{}) {
 
 // sendErrorResponse sends a structured error message to the client.
 func (a *PlayerSessionActor) sendErrorResponse(errCode string, errMsg string) {
-	errorPayload := network.ErrorResponsePayload{
+	errorPayload := protocol.ErrorResponsePayload{
 		Code:    errCode,
 		Message: errMsg,
 	}
-	a.sendResponse(network.MsgTypeError, errorPayload)
+	a.sendResponse(protocol.MsgTypeError, errorPayload)
 }
 
 // sendSimpleMessage sends a simple text message to the client, wrapped in standard JSON structure.
 func (a *PlayerSessionActor) sendSimpleMessage(message string) {
-	payload := network.SimpleMessagePayload{
+	payload := protocol.SimpleMessagePayload{
 		Message: message,
 	}
-	a.sendResponse(network.MsgTypeSimpleMessage, payload)
+	a.sendResponse(protocol.MsgTypeSimpleMessage, payload)
 }
 
 func (a *PlayerSessionActor) isAuthenticated() bool {

@@ -11,10 +11,10 @@ type AuthenticatePlayer struct {
 // PlayerAuthenticated is sent back from PlayerSessionActor or an AuthActor
 // to confirm authentication, potentially including the player's main data PID.
 type PlayerAuthenticated struct {
-	PlayerID  string
+	PlayerID       string
 	PlayerActorPID *actor.PID // PID for an actor managing this player's persistent state/data
-	Success   bool
-	Error     string
+	Success        bool
+	Error          string
 }
 
 // LoadPlayerRequest is sent to a data management actor to load player data.
@@ -48,13 +48,26 @@ type SavePlayerResponse struct {
 // PlayerEnterWorld is sent by PlayerSessionActor after successful authentication
 // to a WorldManagerActor or similar, to signal the player is entering the game world.
 type PlayerEnterWorld struct {
-	PlayerID       string
-	SessionPID     *actor.PID // The PID of the PlayerSessionActor
-	CharacterID    string     // If characters are separate from player accounts
+	PlayerID    string
+	SessionPID  *actor.PID // The PID of the PlayerSessionActor
+	CharacterID string     // If characters are separate from player accounts
 }
 
 // PlayerLeaveWorld is sent when a player session ends or they log out.
 type PlayerLeaveWorld struct {
-	PlayerID string
+	PlayerID   string
 	SessionPID *actor.PID
+}
+
+// PlayerEnteredWorld is sent by PlayerSessionActor after successful authentication
+// to a WorldManagerActor or similar, to signal the player has entered the game world.
+type PlayerEnteredWorld struct {
+	PlayerID  string
+	PlayerPID *actor.PID // The PID of the PlayerSessionActor
+}
+
+// PlayerLeftWorld is sent when a player session ends or they log out.
+type PlayerLeftWorld struct {
+	PlayerID  string
+	PlayerPID *actor.PID
 }

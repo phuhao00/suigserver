@@ -2,6 +2,8 @@ package sui
 
 import (
 	"fmt"
+	"log"
+
 	// "log" // Will be replaced by utils
 	"github.com/block-vision/sui-go-sdk/models"
 	"github.com/phuhao00/suigserver/server/internal/utils" // For logging
@@ -18,10 +20,10 @@ type GuildSystemSuiService struct {
 func NewGuildSystemSuiService(suiClient *SuiClient, packageID, moduleName string) *GuildSystemSuiService {
 	utils.LogInfo("Initializing Guild System Sui Service...")
 	if suiClient == nil {
-		utils.LogPanic("GuildSystemSuiService: SuiClient cannot be nil")
+		log.Panic("GuildSystemSuiService: SuiClient cannot be nil")
 	}
 	if packageID == "" || moduleName == "" {
-		utils.LogPanic("GuildSystemSuiService: packageID and moduleName must be provided.")
+		log.Panic("GuildSystemSuiService: packageID and moduleName must be provided.")
 	}
 	return &GuildSystemSuiService{
 		suiClient:  suiClient,
@@ -39,7 +41,7 @@ func (s *GuildSystemSuiService) CreateGuild(
 	guildDescription string,
 	leaderGasObjectID string, // Gas object owned by the leader
 	gasBudget uint64,
-) (models.TransactionBlockResponse, error) {
+) (models.TxnMetaData, error) {
 	functionName := "create_guild"
 	utils.LogInfof("GuildSystemSuiService: Player %s preparing to create guild '%s' (%s). Package: %s, Module: %s, GasObject: %s, GasBudget: %d",
 		leaderAddress, guildName, guildSymbol, s.packageID, s.moduleName, leaderGasObjectID, gasBudget)
@@ -47,7 +49,7 @@ func (s *GuildSystemSuiService) CreateGuild(
 	if leaderAddress == "" || guildName == "" || guildSymbol == "" || leaderGasObjectID == "" {
 		errMsg := "leaderAddress, guildName, guildSymbol, and leaderGasObjectID must be provided for CreateGuild"
 		utils.LogError("GuildSystemSuiService: " + errMsg)
-		return models.TransactionBlockResponse{}, fmt.Errorf(errMsg)
+		return models.TxnMetaData{}, fmt.Errorf(errMsg)
 	}
 
 	callArgs := []interface{}{
@@ -70,7 +72,7 @@ func (s *GuildSystemSuiService) CreateGuild(
 
 	if err != nil {
 		utils.LogErrorf("GuildSystemSuiService: Error preparing CreateGuild transaction for '%s': %v", guildName, err)
-		return models.TransactionBlockResponse{}, fmt.Errorf("MoveCall failed for CreateGuild ('%s'): %w", guildName, err)
+		return models.TxnMetaData{}, fmt.Errorf("MoveCall failed for CreateGuild ('%s'): %w", guildName, err)
 	}
 	utils.LogInfof("GuildSystemSuiService: CreateGuild transaction prepared for '%s'. TxBytes: %s",
 		guildName, txBlockResponse.TxBytes)
@@ -97,11 +99,11 @@ func (s *GuildSystemSuiService) GetGuildInfo(guildObjectID string) (models.SuiOb
 // Returns TransactionBlockResponse for subsequent signing and execution.
 func (s *GuildSystemSuiService) AddMember(
 	requesterAddress string, // Signer of the transaction (e.g., guild officer)
-	guildObjectID string,    // The ID of the guild object
-	playerAddress string,    // The address of the player to be added
+	guildObjectID string, // The ID of the guild object
+	playerAddress string, // The address of the player to be added
 	requesterGasObjectID string,
 	gasBudget uint64,
-) (models.TransactionBlockResponse, error) {
+) (models.TxnMetaData, error) {
 	functionName := "add_member"
 	utils.LogInfof("GuildSystemSuiService: User %s preparing to add player %s to guild %s. GasObject: %s, GasBudget: %d",
 		requesterAddress, playerAddress, guildObjectID, requesterGasObjectID, gasBudget)
@@ -109,7 +111,7 @@ func (s *GuildSystemSuiService) AddMember(
 	if requesterAddress == "" || guildObjectID == "" || playerAddress == "" || requesterGasObjectID == "" {
 		errMsg := "requesterAddress, guildObjectID, playerAddress, and requesterGasObjectID must be provided for AddMember"
 		utils.LogError("GuildSystemSuiService: " + errMsg)
-		return models.TransactionBlockResponse{}, fmt.Errorf(errMsg)
+		return models.TxnMetaData{}, fmt.Errorf(errMsg)
 	}
 
 	callArgs := []interface{}{
@@ -130,7 +132,7 @@ func (s *GuildSystemSuiService) AddMember(
 	)
 	if err != nil {
 		utils.LogErrorf("GuildSystemSuiService: Error preparing AddMember transaction (Guild: %s, Player: %s): %v", guildObjectID, playerAddress, err)
-		return models.TransactionBlockResponse{}, fmt.Errorf("MoveCall failed for AddMember (Guild: %s, Player: %s): %w", guildObjectID, playerAddress, err)
+		return models.TxnMetaData{}, fmt.Errorf("MoveCall failed for AddMember (Guild: %s, Player: %s): %w", guildObjectID, playerAddress, err)
 	}
 	utils.LogInfof("GuildSystemSuiService: AddMember transaction prepared (Guild: %s, Player: %s). TxBytes: %s",
 		guildObjectID, playerAddress, txBlockResponse.TxBytes)
@@ -145,7 +147,7 @@ func (s *GuildSystemSuiService) RemoveMember(
 	playerAddress string, // Player to remove
 	requesterGasObjectID string,
 	gasBudget uint64,
-) (models.TransactionBlockResponse, error) {
+) (models.TxnMetaData, error) {
 	functionName := "remove_member"
 	utils.LogInfof("GuildSystemSuiService: User %s preparing to remove player %s from guild %s. GasObject: %s, GasBudget: %d",
 		requesterAddress, playerAddress, guildObjectID, requesterGasObjectID, gasBudget)
@@ -153,7 +155,7 @@ func (s *GuildSystemSuiService) RemoveMember(
 	if requesterAddress == "" || guildObjectID == "" || playerAddress == "" || requesterGasObjectID == "" {
 		errMsg := "requesterAddress, guildObjectID, playerAddress, and requesterGasObjectID must be provided for RemoveMember"
 		utils.LogError("GuildSystemSuiService: " + errMsg)
-		return models.TransactionBlockResponse{}, fmt.Errorf(errMsg)
+		return models.TxnMetaData{}, fmt.Errorf(errMsg)
 	}
 
 	callArgs := []interface{}{
@@ -175,7 +177,7 @@ func (s *GuildSystemSuiService) RemoveMember(
 
 	if err != nil {
 		utils.LogErrorf("GuildSystemSuiService: Error preparing RemoveMember transaction (Guild: %s, Player: %s): %v", guildObjectID, playerAddress, err)
-		return models.TransactionBlockResponse{}, fmt.Errorf("MoveCall failed for RemoveMember (Guild: %s, Player: %s): %w", guildObjectID, playerAddress, err)
+		return models.TxnMetaData{}, fmt.Errorf("MoveCall failed for RemoveMember (Guild: %s, Player: %s): %w", guildObjectID, playerAddress, err)
 	}
 	utils.LogInfof("GuildSystemSuiService: RemoveMember transaction prepared (Guild: %s, Player: %s). TxBytes: %s",
 		guildObjectID, playerAddress, txBlockResponse.TxBytes)
@@ -193,7 +195,7 @@ func (s *GuildSystemSuiService) UpdateGuildDescription(
 	newDescription string,
 	officerGasObjectID string,
 	gasBudget uint64,
-) (models.TransactionBlockResponse, error) {
+) (models.TxnMetaData, error) {
 	functionName := "update_guild_description" // Assumed Move function name
 	utils.LogInfof("GuildSystemSuiService: Officer %s preparing to update description for guild %s. GasObject: %s, GasBudget: %d",
 		officerAddress, guildObjectID, officerGasObjectID, gasBudget)
@@ -201,7 +203,7 @@ func (s *GuildSystemSuiService) UpdateGuildDescription(
 	if officerAddress == "" || guildObjectID == "" || newDescription == "" || officerGasObjectID == "" {
 		errMsg := "officerAddress, guildObjectID, newDescription, and officerGasObjectID must be provided for UpdateGuildDescription"
 		utils.LogError("GuildSystemSuiService: " + errMsg)
-		return models.TransactionBlockResponse{}, fmt.Errorf(errMsg)
+		return models.TxnMetaData{}, fmt.Errorf(errMsg)
 	}
 
 	callArgs := []interface{}{guildObjectID, newDescription}
@@ -210,7 +212,7 @@ func (s *GuildSystemSuiService) UpdateGuildDescription(
 	txBlockResponse, err := s.suiClient.MoveCall(officerAddress, s.packageID, s.moduleName, functionName, typeArgs, callArgs, officerGasObjectID, gasBudget)
 	if err != nil {
 		utils.LogErrorf("GuildSystemSuiService: MoveCall failed for UpdateGuildDescription (Guild: %s): %v", guildObjectID, err)
-		return models.TransactionBlockResponse{}, fmt.Errorf("MoveCall failed for UpdateGuildDescription (Guild: %s): %w", guildObjectID, err)
+		return models.TxnMetaData{}, fmt.Errorf("MoveCall failed for UpdateGuildDescription (Guild: %s): %w", guildObjectID, err)
 	}
 	return txBlockResponse, nil
 }
@@ -224,7 +226,7 @@ func (s *GuildSystemSuiService) PromoteMember(
 	newRank string, // Or an enum/u8 representing the rank
 	officerGasObjectID string,
 	gasBudget uint64,
-) (models.TransactionBlockResponse, error) {
+) (models.TxnMetaData, error) {
 	functionName := "promote_member" // Assumed Move function name
 	utils.LogInfof("GuildSystemSuiService: Officer %s preparing to promote member %s in guild %s to rank %s. GasObject: %s, GasBudget: %d",
 		officerAddress, memberAddress, guildObjectID, newRank, officerGasObjectID, gasBudget)
@@ -243,7 +245,7 @@ func (s *GuildSystemSuiService) DemoteMember(
 	newRank string, // Or an enum/u8
 	officerGasObjectID string,
 	gasBudget uint64,
-) (models.TransactionBlockResponse, error) {
+) (models.TxnMetaData, error) {
 	functionName := "demote_member" // Assumed
 	utils.LogInfof("GuildSystemSuiService: Officer %s preparing to demote member %s in guild %s to rank %s. GasObject: %s, GasBudget: %d",
 		officerAddress, memberAddress, guildObjectID, newRank, officerGasObjectID, gasBudget)
@@ -261,7 +263,7 @@ func (s *GuildSystemSuiService) TransferLeadership(
 	newLeaderAddress string,
 	leaderGasObjectID string,
 	gasBudget uint64,
-) (models.TransactionBlockResponse, error) {
+) (models.TxnMetaData, error) {
 	functionName := "transfer_leadership" // Assumed
 	utils.LogInfof("GuildSystemSuiService: Leader %s preparing to transfer leadership of guild %s to %s. GasObject: %s, GasBudget: %d",
 		currentLeaderAddress, guildObjectID, newLeaderAddress, leaderGasObjectID, gasBudget)
@@ -278,7 +280,7 @@ func (s *GuildSystemSuiService) DisbandGuild(
 	guildObjectID string,
 	leaderGasObjectID string,
 	gasBudget uint64,
-) (models.TransactionBlockResponse, error) {
+) (models.TxnMetaData, error) {
 	functionName := "disband_guild" // Assumed
 	utils.LogInfof("GuildSystemSuiService: Leader %s preparing to disband guild %s. GasObject: %s, GasBudget: %d",
 		leaderAddress, guildObjectID, leaderGasObjectID, gasBudget)
@@ -295,11 +297,11 @@ func (s *GuildSystemSuiService) ManageGuildBank(
 	officerAddress string, // Signer
 	guildObjectID string,
 	itemOrCoinID string, // ID of the item/coin object to transfer
-	amount uint64,       // Relevant for fungible tokens/currency
-	actionType string,   // e.g., "deposit_item", "withdraw_ft"
+	amount uint64, // Relevant for fungible tokens/currency
+	actionType string, // e.g., "deposit_item", "withdraw_ft"
 	officerGasObjectID string,
 	gasBudget uint64,
-) (models.TransactionBlockResponse, error) {
+) (models.TxnMetaData, error) {
 	// This is very schematic as bank interactions can be complex.
 	// E.g., depositing an NFT might be one function, FT another.
 	// functionName would vary based on actionType and item type.
@@ -321,7 +323,7 @@ func (s *GuildSystemSuiService) ManageGuildBank(
 		callArgs = []interface{}{guildObjectID, amount} // amount of game coin, recipient is officerAddress
 	} else {
 		utils.LogErrorf("GuildSystemSuiService: Unsupported guild bank actionType: %s", actionType)
-		return models.TransactionBlockResponse{}, fmt.Errorf("unsupported guild bank actionType: %s", actionType)
+		return models.TxnMetaData{}, fmt.Errorf("unsupported guild bank actionType: %s", actionType)
 	}
 
 	typeArgs := []string{} // May need type args if bank functions are generic (e.g. for Coin<T>)

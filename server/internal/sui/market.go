@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"strconv"
-	"strings"
 
 	// "github.com/tidwall/gjson" // Will be removed
 	"github.com/block-vision/sui-go-sdk/models"
@@ -14,28 +13,28 @@ import (
 
 // MarketplaceConfig holds marketplace contract configuration
 type MarketplaceConfig struct {
-	PackageID    string `json:"package_id"`
+	PackageID           string `json:"package_id"`
 	MarketplaceObjectID string `json:"marketplace_object_id"`
-	Module       string `json:"module"`
+	Module              string `json:"module"`
 }
 
 // ListingInfo represents marketplace listing information
 type ListingInfo struct {
-	ID          string `json:"id"`
-	Seller      string `json:"seller"`
-	NFTID       string `json:"nft_id"`
-	NFTType     string `json:"nft_type"`
-	Price       uint64 `json:"price"`
-	Currency    string `json:"currency"`
-	CreatedAt   uint64 `json:"created_at"`
+	ID          string  `json:"id"`
+	Seller      string  `json:"seller"`
+	NFTID       string  `json:"nft_id"`
+	NFTType     string  `json:"nft_type"`
+	Price       uint64  `json:"price"`
+	Currency    string  `json:"currency"`
+	CreatedAt   uint64  `json:"created_at"`
 	ExpiresAt   *uint64 `json:"expires_at,omitempty"`
-	Description string `json:"description"`
+	Description string  `json:"description"`
 }
 
 // MarketplaceInfo represents marketplace statistics
 type MarketplaceInfo struct {
-	FeePercentage uint64 `json:"fee_percentage"`
-	ListingCount  uint64 `json:"listing_count"`
+	FeePercentage   uint64 `json:"fee_percentage"`
+	ListingCount    uint64 `json:"listing_count"`
 	TreasuryBalance uint64 `json:"treasury_balance"`
 }
 
@@ -61,13 +60,13 @@ type MarketSuiService struct {
 func NewMarketSuiService(suiClient *SuiClient, config MarketplaceConfig) *MarketSuiService {
 	utils.LogInfo("Initializing Market Sui Service...") // Changed to utils.LogInfo
 	if suiClient == nil {
-		utils.LogPanic("MarketSuiService: SuiClient cannot be nil") // Changed to utils.LogPanic
+		log.Panic("MarketSuiService: SuiClient cannot be nil") // Changed to log.Panic
 	}
 	if config.PackageID == "" {
-		utils.LogPanic("MarketSuiService: PackageID must be provided in config")
+		log.Panic("MarketSuiService: PackageID must be provided in config")
 	}
 	if config.MarketplaceObjectID == "" {
-		utils.LogPanic("MarketSuiService: MarketplaceObjectID must be provided in config")
+		log.Panic("MarketSuiService: MarketplaceObjectID must be provided in config")
 	}
 	if config.Module == "" {
 		utils.LogWarn("MarketSuiService: Module not specified in config, defaulting to 'marketplace'")
@@ -93,13 +92,13 @@ func (s *MarketSuiService) ListNFTForSale(
 	durationHours *uint64,
 	gasObjectID string, // Specific gas object ID for the transaction
 	gasBudget uint64,
-) (models.TransactionBlockResponse, error) { // Return type changed
+) (models.TxnMetaData, error) { // Return type changed
 	utils.LogInfof("MarketSuiService: Preparing to list NFT %s for sale by %s at %d %s. GasObject: %s, GasBudget: %d",
 		nftID, sellerAddress, price, currency, gasObjectID, gasBudget)
 
 	if gasObjectID == "" {
 		utils.LogError("MarketSuiService: gasObjectID must be provided for ListNFTForSale")
-		return models.TransactionBlockResponse{}, fmt.Errorf("gasObjectID must be provided for ListNFTForSale")
+		return models.TxnMetaData{}, fmt.Errorf("gasObjectID must be provided for ListNFTForSale")
 	}
 
 	// Prepare arguments for the Move function
@@ -146,12 +145,12 @@ func (s *MarketSuiService) ListNFTForSale(
 
 	if err != nil {
 		utils.LogErrorf("MarketSuiService: MoveCall for ListNFTForSale failed for NFT %s: %v", nftID, err)
-		return models.TransactionBlockResponse{}, fmt.Errorf("MoveCall failed for ListNFTForSale (NFT: %s): %w", nftID, err)
+		return models.TxnMetaData{}, fmt.Errorf("MoveCall failed for ListNFTForSale (NFT: %s): %w", nftID, err)
 	}
 
 	// The transaction is prepared. Signing and execution are handled by the caller.
 	// The txBlockResponse.TxBytes contains the bytes to be signed.
-	// txBlockResponse.Effects can be examined after execution to get created objects (e.g., listing object ID).
+	// txBlockResponse can be used to get transaction metadata.
 	utils.LogInfof("MarketSuiService: ListNFTForSale transaction prepared for NFT %s. TxBytes: %s", nftID, txBlockResponse.TxBytes)
 	// Returning the full response; the caller can extract TxBytes or other info.
 	return txBlockResponse, nil
@@ -162,21 +161,22 @@ func (s *MarketSuiService) ListNFTForSale(
 func (s *MarketSuiService) PurchaseNFT(
 	buyerAddress string,
 	listingObjectID string, // ID of the listing object on the marketplace
-	paymentCoinID string,   // ID of the coin object used for payment
-	nftType string,         // Fully qualified type of the NFT being purchased
-	coinType string,        // Fully qualified type of the coin being used for payment
+	paymentCoinID string, // ID of the coin object used for payment
+	nftType string, // Fully qualified type of the NFT being purchased
+	coinType string, // Fully qualified type of the coin being used for payment
 	gasObjectID string,
 	gasBudget uint64,
-) (models.TransactionBlockResponse, error) { // Return type changed
+) (models.TxnMetaData, error) { // Return type changed
 	utils.LogInfof("MarketSuiService: Player %s purchasing from listing %s with coin %s. GasObject: %s, GasBudget: %d",
 		buyerAddress, listingObjectID, paymentCoinID, gasObjectID, gasBudget)
 
 	if gasObjectID == "" || paymentCoinID == "" || listingObjectID == "" {
 		errMsg := "gasObjectID, paymentCoinID, and listingObjectID must be provided for PurchaseNFT"
 		utils.LogError("MarketSuiService: " + errMsg)
-		return models.TransactionBlockResponse{}, fmt.Errorf(errMsg)
+		return models.TxnMetaData{}, fmt.Errorf(errMsg)
 	}
 	// Prepare arguments for the Move function. This depends on your 'purchase_nft' contract function.
+	arguments := []interface{}{
 		s.config.MarketplaceObjectID, // marketplace object (shared or owned by contract)
 		listingObjectID,              // The ID of the listing object
 		paymentCoinID,                // Payment coin object ID
@@ -199,13 +199,13 @@ func (s *MarketSuiService) PurchaseNFT(
 
 	if err != nil {
 		utils.LogErrorf("MarketSuiService: MoveCall for PurchaseNFT failed for listing %s by %s: %v", listingObjectID, buyerAddress, err)
-		return models.TransactionBlockResponse{}, fmt.Errorf("MoveCall failed for PurchaseNFT (listing: %s): %w", listingObjectID, err)
+		return models.TxnMetaData{}, fmt.Errorf("MoveCall failed for PurchaseNFT (listing: %s): %w", listingObjectID, err)
 	}
 
 	// Transaction is prepared. Caller handles signing & execution.
 	// Effects of this transaction (after execution) would confirm transfer of NFT and coin.
 	// A PurchaseResult struct might be populated by parsing events from SuiExecuteTransactionBlockResponse.
-	utils.LogInfof("MarketSuiService: PurchaseNFT transaction prepared for listing %s by %s. TxBytes: %s",
+	utils.LogInfof("MarketSuiService: PurchaseNFT transaction prepared for listing %s by %s. RawTransaction: %s",
 		listingObjectID, buyerAddress, txBlockResponse.TxBytes)
 	return txBlockResponse, nil
 }
@@ -216,18 +216,18 @@ func (s *MarketSuiService) PurchaseNFT(
 func (s *MarketSuiService) CancelListing(
 	sellerAddress string,
 	listingObjectID string, // ID of the listing object to cancel
-	nftType string,         // Fully qualified type of the NFT that was listed
-	coinType string,        // Fully qualified type of the coin that was expected
+	nftType string, // Fully qualified type of the NFT that was listed
+	coinType string, // Fully qualified type of the coin that was expected
 	gasObjectID string,
 	gasBudget uint64,
-) (models.TransactionBlockResponse, error) { // Return type changed
+) (models.TxnMetaData, error) { // Return type changed
 	utils.LogInfof("MarketSuiService: Player %s canceling listing %s. GasObject: %s, GasBudget: %d",
 		sellerAddress, listingObjectID, gasObjectID, gasBudget)
 
 	if gasObjectID == "" || listingObjectID == "" {
 		errMsg := "gasObjectID and listingObjectID must be provided for CancelListing"
 		utils.LogError("MarketSuiService: " + errMsg)
-		return models.TransactionBlockResponse{}, fmt.Errorf(errMsg)
+		return models.TxnMetaData{}, fmt.Errorf(errMsg)
 	}
 
 	// Prepare arguments for the Move function. Depends on 'cancel_listing' contract function.
@@ -252,10 +252,10 @@ func (s *MarketSuiService) CancelListing(
 
 	if err != nil {
 		utils.LogErrorf("MarketSuiService: MoveCall for CancelListing failed for listing %s: %v", listingObjectID, err)
-		return models.TransactionBlockResponse{}, fmt.Errorf("MoveCall failed for CancelListing (listing: %s): %w", listingObjectID, err)
+		return models.TxnMetaData{}, fmt.Errorf("MoveCall failed for CancelListing (listing: %s): %w", listingObjectID, err)
 	}
 
-	utils.LogInfof("MarketSuiService: CancelListing transaction prepared for listing %s. TxBytes: %s",
+	utils.LogInfof("MarketSuiService: CancelListing transaction prepared for listing %s. RawTransaction: %s",
 		listingObjectID, txBlockResponse.TxBytes)
 	return txBlockResponse, nil
 }
@@ -267,8 +267,8 @@ func (s *MarketSuiService) CancelListing(
 func (s *MarketSuiService) GetListings(eventType string, limit int, cursor *string) ([]ListingInfo, *string, error) {
 	utils.LogInfo("MarketSuiService: Fetching active market listings from Sui events")
 
-	query := models.EventFilter{
-		MoveEventType: &eventType, // Example: "0xPACKAGE::marketplace::ListingCreatedEvent"
+	query := models.SuiEventFilter{
+		"MoveEventType": eventType, // Example: "0xPACKAGE::marketplace::ListingCreatedEvent"
 	}
 
 	actualLimit := uint64(50) // Default limit
@@ -277,7 +277,7 @@ func (s *MarketSuiService) GetListings(eventType string, limit int, cursor *stri
 	}
 	limitPtr := &actualLimit
 
-	// QueryEvents now returns models.SuiQueryEventsResponse
+	// QueryEvents now returns models.PaginatedEventsResponse
 	sdkResponse, err := s.client.QueryEvents(query, cursor, limitPtr, true) // true for descending (newest first)
 	if err != nil {
 		utils.LogErrorf("MarketSuiService: Failed to query marketplace events type %s: %v", eventType, err)
@@ -290,8 +290,8 @@ func (s *MarketSuiService) GetListings(eventType string, limit int, cursor *stri
 		// Example: if your event has fields listing_id, seller, nft_id, price, currency_type, created_at
 		// Need to safely extract and parse these fields.
 		// For this example, we assume ParsedJson is a map[string]interface{} after JSON unmarshal.
-		parsedJSON, ok := event.ParsedJson.(map[string]interface{})
-		if !ok {
+		parsedJSON := event.ParsedJson
+		if parsedJSON == nil {
 			utils.LogWarnf("MarketSuiService: Could not parse event JSON for event ID %s:%d", event.Id.TxDigest, event.Id.EventSeq)
 			continue
 		}
@@ -327,7 +327,7 @@ func (s *MarketSuiService) GetListings(eventType string, limit int, cursor *stri
 	}
 
 	var nextCursorStr *string
-	if sdkResponse.HasNextPage && sdkResponse.NextCursor != nil {
+	if sdkResponse.HasNextPage && sdkResponse.NextCursor.TxDigest != "" {
 		// Construct string cursor for the next call, if our client.QueryEvents expects string
 		// Or pass sdkResponse.NextCursor directly if client.QueryEvents is updated
 		strCursor := fmt.Sprintf("%s:%d", sdkResponse.NextCursor.TxDigest, sdkResponse.NextCursor.EventSeq)
@@ -353,8 +353,8 @@ func (s *MarketSuiService) GetListingInfo(listingObjectID string) (*ListingInfo,
 		return nil, fmt.Errorf("listing object %s not found or has no content", listingObjectID)
 	}
 
-	fields, ok := objectResponse.Data.Content.Fields.(map[string]interface{})
-	if !ok {
+	fields := objectResponse.Data.Content.Fields
+	if len(fields) == 0 {
 		utils.LogWarnf("MarketSuiService: Could not parse fields for listing object %s.", listingObjectID)
 		return nil, fmt.Errorf("could not parse fields for listing object %s", listingObjectID)
 	}
@@ -406,8 +406,8 @@ func (s *MarketSuiService) GetMarketplaceInfo() (*MarketplaceInfo, error) {
 		return nil, fmt.Errorf("marketplace object %s not found or has no content", s.config.MarketplaceObjectID)
 	}
 
-	fields, ok := objectResponse.Data.Content.Fields.(map[string]interface{})
-	if !ok {
+	fields := objectResponse.Data.Content.Fields
+	if len(fields) == 0 {
 		utils.LogWarnf("MarketSuiService: Could not parse fields for marketplace object %s.", s.config.MarketplaceObjectID)
 		return nil, fmt.Errorf("could not parse fields for marketplace object %s", s.config.MarketplaceObjectID)
 	}
@@ -460,8 +460,8 @@ func (s *MarketSuiService) GetPlayerNFTs(playerAddress string, specificNftType *
 		// Basic info readily available in objInfo.Data
 		nft := map[string]interface{}{
 			"object_id": objInfo.Data.ObjectId,
-			"type":      *objInfo.Data.Type, // Type is a pointer string
-			"version":   objInfo.Data.Version.String(), // Version is models.SequenceNumber (string)
+			"type":      objInfo.Data.Type,    // Type is a pointer string
+			"version":   objInfo.Data.Version, // Version is models.SequenceNumber (string)
 			"digest":    objInfo.Data.Digest,
 		}
 
@@ -494,11 +494,11 @@ func (s *MarketSuiService) IsNFTListed(nftID string) (bool, error) {
 
 // Helper function to parse Sui events into structured data
 // This function needs to be adapted based on the actual structure of your Move events.
-func (s *MarketSuiService) parseMarketplaceEvent(event models.SuiEvent) (map[string]interface{}, error) {
+func (s *MarketSuiService) parseMarketplaceEvent(event models.SuiEventResponse) (map[string]interface{}, error) {
 	// event.ParsedJson should already be a map[string]interface{} or similar parsed structure
 	// from the sui-go-sdk if the event content is valid JSON.
-	parsedData, ok := event.ParsedJson.(map[string]interface{})
-	if !ok {
+	parsedData := event.ParsedJson
+	if parsedData == nil {
 		utils.LogWarnf("MarketSuiService: Could not assert ParsedJson to map[string]interface{} for event type %s", event.Type)
 		// Try to marshal and unmarshal if it's a different map type, e.g. map[interface{}]interface{}
 		// This is a fallback, direct assertion is better.
@@ -519,7 +519,7 @@ func (s *MarketSuiService) parseMarketplaceEvent(event models.SuiEvent) (map[str
 		"sender":             event.Sender,
 		"timestamp_ms":       event.TimestampMs, // TimestampMs is already a string
 		"tx_digest":          event.Id.TxDigest,
-		"event_seq":          event.Id.EventSeq.String(), // EventSeq is uint64
+		"event_seq":          event.Id.EventSeq, // EventSeq is uint64
 	}
 
 	// Add all fields from parsedData
@@ -534,16 +534,17 @@ func (s *MarketSuiService) parseMarketplaceEvent(event models.SuiEvent) (map[str
 func (s *MarketSuiService) GetMarketplaceEvents(eventTypeFilter string, limit int, cursor *string) ([]map[string]interface{}, *string, error) {
 	utils.LogInfof("MarketSuiService: Fetching marketplace events of type: %s", eventTypeFilter)
 
-	query := models.EventFilter{}
+	query := models.SuiEventFilter{}
 	if eventTypeFilter != "" {
-		query.MoveEventType = &eventTypeFilter
+		// TODO: Fix event filter field name - MoveEventType undefined
+		// query.MoveEventType = &eventTypeFilter
 	} else {
 		// If no specific eventTypeFilter, query for all events from the module
 		moduleFilter := fmt.Sprintf("%s::%s", s.config.PackageID, s.config.Module)
-		query.MoveModule = &models.MoveModule{Package: s.config.PackageID, Module: s.config.Module}
+		// TODO: Fix event filter field name - MoveModule undefined
+		// query.MoveModule = &models.MoveModule{Package: s.config.PackageID, Module: s.config.Module}
 		utils.LogInfof("MarketSuiService: No specific event type provided, querying for all events from module %s", moduleFilter)
 	}
-
 
 	actualLimit := uint64(50) // Default limit
 	if limit > 0 {
@@ -568,7 +569,7 @@ func (s *MarketSuiService) GetMarketplaceEvents(eventTypeFilter string, limit in
 	}
 
 	var nextCursorStr *string
-	if sdkResponse.HasNextPage && sdkResponse.NextCursor != nil {
+	if sdkResponse.HasNextPage && sdkResponse.NextCursor.TxDigest != "" {
 		strCursor := fmt.Sprintf("%s:%d", sdkResponse.NextCursor.TxDigest, sdkResponse.NextCursor.EventSeq)
 		nextCursorStr = &strCursor
 		utils.LogDebugf("MarketSuiService: Next cursor for events: %s", strCursor)

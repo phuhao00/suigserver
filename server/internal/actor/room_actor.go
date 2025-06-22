@@ -218,8 +218,8 @@ func (a *RoomActor) notifyManagerPlayerCountChanged(ctx actor.Context) {
 	log.Printf("[RoomActor %s] Notified RoomManager. Current players: %d/%d", a.roomID, len(a.players), a.maxPlayers)
 }
 
-// Props creates actor.Props for RoomActor.
+// PropsForRoom creates actor.Props for RoomActor.
 // It now requires roomManagerPID.
-func Props(roomID, roomName string, maxPlayers int, system *actor.ActorSystem, roomManagerPID *actor.PID) *actor.Props {
+func PropsForRoom(roomID, roomName string, maxPlayers int, system *actor.ActorSystem, roomManagerPID *actor.PID) *actor.Props {
 	return actor.PropsFromProducer(func() actor.Actor { return NewRoomActor(roomID, roomName, maxPlayers, system, roomManagerPID) })
 }

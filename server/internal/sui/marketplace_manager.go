@@ -2,6 +2,7 @@ package sui
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,7 +14,6 @@ import (
 // MarketplaceServiceManager manages the marketplace service, adding features like caching,
 // rate limiting, and potentially orchestrating transaction signing and execution.
 // For now, it primarily adapts the new MarketSuiService interface.
-type MarketplaceServiceManager struct {
 type MarketplaceServiceManager struct {
 	marketService *MarketSuiService
 	client        *SuiClient
@@ -174,16 +174,16 @@ func (m *MarketplaceServiceManager) PrepareListNFTForSale(
 	description string,
 	durationHours *uint64,
 	gasObjectID string, // Specific gas object ID for this transaction
-) (models.TransactionBlockResponse, error) {
+) (models.TxnMetaData, error) {
 	if !m.checkRateLimit(sellerAddress) {
-		return models.TransactionBlockResponse{}, fmt.Errorf("rate limit exceeded for user %s", sellerAddress)
+		return models.TxnMetaData{}, fmt.Errorf("rate limit exceeded for user %s", sellerAddress)
 	}
 
 	if durationHours != nil && *durationHours > m.config.MaxListingDuration {
-		return models.TransactionBlockResponse{}, fmt.Errorf("listing duration exceeds maximum allowed (%d hours)", m.config.MaxListingDuration)
+		return models.TxnMetaData{}, fmt.Errorf("listing duration exceeds maximum allowed (%d hours)", m.config.MaxListingDuration)
 	}
 	if gasObjectID == "" {
-		return models.TransactionBlockResponse{}, fmt.Errorf("gasObjectID is required for PrepareListNFTForSale")
+		return models.TxnMetaData{}, fmt.Errorf("gasObjectID is required for PrepareListNFTForSale")
 	}
 
 	// Call marketplace service - note the new signature
@@ -192,7 +192,7 @@ func (m *MarketplaceServiceManager) PrepareListNFTForSale(
 		gasObjectID, m.config.DefaultGasBudget, // Using default gas budget from config
 	)
 	if err != nil {
-		return models.TransactionBlockResponse{}, err // Error already logged by service
+		return models.TxnMetaData{}, err // Error already logged by service
 	}
 
 	// Invalidate relevant caches if the operation implies a state change that affects cached data.
@@ -212,15 +212,15 @@ func (m *MarketplaceServiceManager) PreparePurchaseNFT(
 	buyerAddress string,
 	listingObjectID string,
 	paymentCoinID string,
-	nftType string,     // Fully qualified type of the NFT being purchased
-	coinType string,    // Fully qualified type of the coin being used for payment
+	nftType string, // Fully qualified type of the NFT being purchased
+	coinType string, // Fully qualified type of the coin being used for payment
 	buyerGasObjectID string,
-) (models.TransactionBlockResponse, error) {
+) (models.TxnMetaData, error) {
 	if !m.checkRateLimit(buyerAddress) {
-		return models.TransactionBlockResponse{}, fmt.Errorf("rate limit exceeded for user %s", buyerAddress)
+		return models.TxnMetaData{}, fmt.Errorf("rate limit exceeded for user %s", buyerAddress)
 	}
 	if buyerGasObjectID == "" || paymentCoinID == "" || listingObjectID == "" {
-		return models.TransactionBlockResponse{}, fmt.Errorf("buyerGasObjectID, paymentCoinID, and listingObjectID are required")
+		return models.TxnMetaData{}, fmt.Errorf("buyerGasObjectID, paymentCoinID, and listingObjectID are required")
 	}
 
 	txBlockResp, err := m.marketService.PurchaseNFT(
@@ -229,7 +229,7 @@ func (m *MarketplaceServiceManager) PreparePurchaseNFT(
 		buyerGasObjectID, m.config.DefaultGasBudget,
 	)
 	if err != nil {
-		return models.TransactionBlockResponse{}, err
+		return models.TxnMetaData{}, err
 	}
 
 	// Invalidation would happen after successful execution.
@@ -248,12 +248,12 @@ func (m *MarketplaceServiceManager) PrepareCancelListing(
 	nftType string, // The type of NFT that was listed
 	coinType string, // The type of Coin that was expected
 	sellerGasObjectID string,
-) (models.TransactionBlockResponse, error) {
+) (models.TxnMetaData, error) {
 	if !m.checkRateLimit(sellerAddress) {
-		return models.TransactionBlockResponse{}, fmt.Errorf("rate limit exceeded for user %s", sellerAddress)
+		return models.TxnMetaData{}, fmt.Errorf("rate limit exceeded for user %s", sellerAddress)
 	}
 	if sellerGasObjectID == "" || listingObjectID == "" {
-		return models.TransactionBlockResponse{}, fmt.Errorf("sellerGasObjectID and listingObjectID are required")
+		return models.TxnMetaData{}, fmt.Errorf("sellerGasObjectID and listingObjectID are required")
 	}
 
 	txBlockResp, err := m.marketService.CancelListing(
@@ -262,7 +262,7 @@ func (m *MarketplaceServiceManager) PrepareCancelListing(
 		sellerGasObjectID, m.config.DefaultGasBudget,
 	)
 	if err != nil {
-		return models.TransactionBlockResponse{}, err
+		return models.TxnMetaData{}, err
 	}
 
 	// Invalidation would happen after successful execution.

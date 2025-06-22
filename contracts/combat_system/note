@@ -1,0 +1,16 @@
+Package ID: 0xe813095ae7094085b73575eed346d54826bb0fec4b425dd913e510c7e06debc9
+Transaction Digest: 2UbvhdCWzxhZxz9F7g47n9yrdXocQWTJPBtKJrKfHKRo
+
+
+AdminCap - 管理员权限对象
+ID: 0x3dc150e13e6d01deef784ff4c2b39beabdb7fe948215891ffa368cea3ed9eada
+CombatRegistry - 战斗注册表（共享对象）
+ID: 0x9fedffa1b626e3fee8ba9cd7ddeac8c26450874ab18822db23023c3678967d0b
+UpgradeCap - 升级权限对象
+ID: 0x7a6569a00a5b1c072b6f5f0b7673c4323eb4dd62f6a16dd2d8f477f167809a3e
+
+
+owner:
+0x38b8b8587bf8a42b530d19f39a4d906b4ea7408840d96820ce7a29c0a1104eca
+
+

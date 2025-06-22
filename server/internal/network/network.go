@@ -1,7 +1,6 @@
 package network
 
 import (
-	"bufio"
 	"io"
 	// "log" // Replaced by utils.LogX
 	"net"
@@ -10,10 +9,11 @@ import (
 	"time"
 
 	"encoding/binary"
+
 	"github.com/asynkron/protoactor-go/actor"
 	sessionactor "github.com/phuhao00/suigserver/server/internal/actor" // Alias for the actor package
 	"github.com/phuhao00/suigserver/server/internal/actor/messages"
-	"github.com/phuhao00/suigserver/server/internal/sui" // For sui.SuiClient
+	"github.com/phuhao00/suigserver/server/internal/sui"   // For sui.SuiClient
 	"github.com/phuhao00/suigserver/server/internal/utils" // Logger
 )
 
@@ -33,8 +33,8 @@ type TCPServer struct {
 	actorSystem     *actor.ActorSystem
 	wg              sync.WaitGroup
 	shutdown        chan struct{}
-	roomManagerPID  *actor.PID    // PID of the RoomManagerActor
-	worldManagerPID *actor.PID    // PID of the WorldManagerActor
+	roomManagerPID  *actor.PID     // PID of the RoomManagerActor
+	worldManagerPID *actor.PID     // PID of the WorldManagerActor
 	suiClient       *sui.SuiClient // SUI client instance
 	// Auth Configs
 	enableDummyAuth bool
@@ -150,7 +150,7 @@ func (s *TCPServer) handleConnection(conn net.Conn) {
 	}
 
 	// PlayerSessionActor now requires worldManagerPID, suiClient, and auth configs.
-	playerSessionProps := sessionactor.Props(
+	playerSessionProps := sessionactor.PropsForPlayerSession(
 		s.actorSystem,
 		s.roomManagerPID,
 		s.worldManagerPID,

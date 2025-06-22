@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+
 	// "github.com/tidwall/gjson" // Will be removed as gjson.Result is no longer returned by CallMoveFunction
 	"github.com/block-vision/sui-go-sdk/models"
 	"github.com/phuhao00/suigserver/server/internal/utils"
@@ -14,18 +15,18 @@ import (
 type ProposalData struct {
 	Title         string                 `json:"title"`
 	Description   string                 `json:"description"`
-	ActionType    string                 `json:"action_type"` // e.g., "UpdateGameParameter", "CommunityPoll"
-	ActionPayload map[string]interface{} `json:"action_payload"` // Data specific to the action
+	ActionType    string                 `json:"action_type"`          // e.g., "UpdateGameParameter", "CommunityPoll"
+	ActionPayload map[string]interface{} `json:"action_payload"`       // Data specific to the action
 	VotingPeriod  uint64                 `json:"voting_period_epochs"` // Duration in epochs
 }
 
 // GovernanceSuiService interacts with the Governance contract(s) on the Sui blockchain.
 type GovernanceSuiService struct {
-	suiClient     *SuiClient // Changed from *Client to *SuiClient
-	packageID     string     // ID of the package containing the governance module
-	moduleName    string     // Name of the Move module, e.g., "dao_governance"
-	adminAddress  string     // An admin address if needed for some operations (e.g. initial setup)
-	gasObjectID   string     // Default gas object for transactions sent by this service (e.g. proposal execution)
+	suiClient    *SuiClient // Changed from *Client to *SuiClient
+	packageID    string     // ID of the package containing the governance module
+	moduleName   string     // Name of the Move module, e.g., "dao_governance"
+	adminAddress string     // An admin address if needed for some operations (e.g. initial setup)
+	gasObjectID  string     // Default gas object for transactions sent by this service (e.g. proposal execution)
 }
 
 // NewGovernanceSuiService creates a new GovernanceSuiService.
@@ -41,11 +42,11 @@ func NewGovernanceSuiService(suiClient *SuiClient, packageID, moduleName, adminA
 		panic("GovernanceSuiService: packageID and moduleName must be provided.") // Or handle error
 	}
 	return &GovernanceSuiService{
-		suiClient:     suiClient, // Corrected from client to suiClient
-		packageID:     packageID,
-		moduleName:    moduleName,
-		adminAddress:  adminAddress,
-		gasObjectID:   gasObjectID,
+		suiClient:    suiClient, // Corrected from client to suiClient
+		packageID:    packageID,
+		moduleName:   moduleName,
+		adminAddress: adminAddress,
+		gasObjectID:  gasObjectID,
 	}
 }
 
@@ -56,7 +57,7 @@ func (s *GovernanceSuiService) CreateProposal(
 	proposal ProposalData,
 	proposerGasObjectID string, // Gas object owned by the proposer
 	gasBudget uint64,
-) (models.TransactionBlockResponse, error) { // Return type changed to models.TransactionBlockResponse
+) (models.TxnMetaData, error) { // Return type changed to models.TxnMetaData
 	functionName := "create_proposal"
 	utils.LogInfof("GovernanceService: Player %s preparing to create governance proposal '%s'. Package: %s, Module: %s",
 		proposerAddress, proposal.Title, s.packageID, s.moduleName)
@@ -64,7 +65,7 @@ func (s *GovernanceSuiService) CreateProposal(
 	payloadJSON, err := json.Marshal(proposal.ActionPayload)
 	if err != nil {
 		utils.LogErrorf("GovernanceService: Failed to marshal proposal action payload for '%s': %v", proposal.Title, err)
-		return models.TransactionBlockResponse{}, fmt.Errorf("failed to marshal proposal action payload: %w", err)
+		return models.TxnMetaData{}, fmt.Errorf("failed to marshal proposal action payload: %w", err)
 	}
 
 	callArgs := []interface{}{
@@ -91,7 +92,7 @@ func (s *GovernanceSuiService) CreateProposal(
 
 	if err != nil {
 		utils.LogErrorf("GovernanceService: Error preparing CreateProposal transaction for '%s': %v", proposal.Title, err)
-		return txBlockResponse, fmt.Errorf("CreateProposal MoveCall failed for %s: %w", proposal.Title, err)
+		return models.TxnMetaData{}, fmt.Errorf("CreateProposal MoveCall failed for %s: %w", proposal.Title, err)
 	}
 	utils.LogInfof("GovernanceService: CreateProposal transaction prepared for '%s'. TxBytes: %s",
 		proposal.Title, txBlockResponse.TxBytes)
@@ -107,7 +108,7 @@ func (s *GovernanceSuiService) VoteOnProposal(
 	voteOption bool, // true for Yes/For, false for No/Against
 	voterGasObjectID string,
 	gasBudget uint64,
-) (models.TransactionBlockResponse, error) { // Return type changed to models.TransactionBlockResponse
+) (models.TxnMetaData, error) { // Return type changed to models.SuiTransactionBlockResponse
 	functionName := "cast_vote"
 	utils.LogInfof("GovernanceService: Player %s preparing to vote on proposal %s (Option: %t).", voterAddress, proposalObjectID, voteOption)
 
@@ -160,7 +161,7 @@ func (s *GovernanceSuiService) ExecuteProposal(
 	proposalObjectID string,
 	executorGasObjectID string,
 	gasBudget uint64,
-) (models.TransactionBlockResponse, error) { // Return type changed to models.TransactionBlockResponse
+) (models.TxnMetaData, error) { // Return type changed to models.SuiTransactionBlockResponse
 	functionName := "execute_proposal"
 	utils.LogInfof("GovernanceService: User %s attempting to execute proposal %s.", executorAddress, proposalObjectID)
 

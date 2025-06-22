@@ -151,6 +151,7 @@ cd contracts/player_system
 cd contracts/player_system
 ./build.sh
 ```
+sui client switch --env devnet
 
 ### Adding New Features
 

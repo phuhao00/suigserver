@@ -1,0 +1,32 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "tcpPort": 8080,
+    "httpPort": 8081,
+    "logLevel": "INFO"
+  },
+  "database": {
+    "postgresUrl": "postgresql://user:password@localhost:5432/mmo_db?sslmode=disable"
+  },
+  "redis": {
+    "address": "localhost:6379",
+    "password": "",
+    "db": 0
+  },
+  "sui": {
+    "rpcUrl": "https://fullnode.testnet.sui.io:443",
+    "websocketUrl": "",
+    "privateKey": "YOUR_SUI_PRIVATE_KEY_HEX_HERE",
+    "gasBudget": 100000000,
+    "gameLogicPackageId": "0xYOUR_GAME_LOGIC_PACKAGE_ID_HERE",
+    "playerRegistryPackageId": "0xYOUR_PLAYER_REGISTRY_PACKAGE_ID_HERE",
+    "itemSystemPackageId": "0xYOUR_ITEM_SYSTEM_PACKAGE_ID_HERE",
+    "playerObjectPackageId": "0xYOUR_PLAYER_OBJECT_PACKAGE_ID_HERE",
+    "playerObjectModule": "player_profile"
+  },
+  "auth": {
+    "dummyToken": "fixed_dummy_secret_token_123",
+    "dummyPlayerId": "player_associated_with_dummy_token",
+    "enableDummyAuth": true
+  }
+}
