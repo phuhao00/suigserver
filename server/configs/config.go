@@ -2,9 +2,10 @@ package configs
 
 import (
 	"encoding/json"
-	"log"
+	"log" // Standard log for initial messages before custom logger is configured
 	"os"
 	"sync"
+	"github.com/phuhao00/suigserver/server/internal/utils" // Logger
 )
 
 // Config holds the application configuration.
@@ -28,11 +29,18 @@ type Config struct {
 		WebsocketURL   string `json:"websocketUrl"` // For event subscriptions
 		PrivateKey     string `json:"privateKey"`   // Server's private key for transactions (handle with care!)
 		GasBudget      uint64 `json:"gasBudget"`
-		// Contract package IDs would go here after deployment
-		// Example: PlayerNFTPackageID string `json:"playerNftPackageId"`
-		// ItemNFTPackageID   string `json:"itemNftPackageId"`
-		// GuildPackageID     string `json:"guildPackageId"`
+		// Placeholder Contract package IDs - replace with actual IDs after deployment
+		GameLogicPackageID      string `json:"gameLogicPackageId"`
+		PlayerRegistryPackageID string `json:"playerRegistryPackageId"`
+		ItemSystemPackageID     string `json:"itemSystemPackageId"`
+		PlayerObjectPackageID   string `json:"playerObjectPackageId"` // For player profile/data objects
+		PlayerObjectModule      string `json:"playerObjectModule"`    // Module name for player profile/data
 	} `json:"sui"`
+	Auth struct {
+		DummyToken      string `json:"dummyToken"`
+		DummyPlayerID   string `json:"dummyPlayerId"`
+		EnableDummyAuth bool   `json:"enableDummyAuth"` // To easily switch it off
+	} `json:"auth"`
 	// Potentially add other sections like JWT secrets, external API keys, etc.
 }
 
@@ -46,11 +54,13 @@ var (
 // It's designed to be called once.
 func LoadConfig(filePath string) (*Config, error) {
 	once.Do(func() {
-		log.Printf("Loading configuration from %s\n", filePath)
+		// Use standard log here initially, as our logger's level isn't set yet.
+		// Or, accept that these initial logs might not be filtered by level if we used utils.Log directly.
+		log.Printf("Loading configuration from %s", filePath) // Standard log
 		file, fileErr := os.ReadFile(filePath)
 		if fileErr != nil {
 			err = fileErr
-			log.Printf("Error reading config file %s: %v\n", filePath, err)
+			log.Printf("Error reading config file %s: %v", filePath, err) // Standard log
 			return
 		}
 
@@ -61,11 +71,11 @@ func LoadConfig(filePath string) (*Config, error) {
 		jsonErr := json.Unmarshal(file, cfg)
 		if jsonErr != nil {
 			err = jsonErr
-			log.Printf("Error unmarshalling config file %s: %v\n", filePath, err)
+			log.Printf("Error unmarshalling config file %s: %v", filePath, err) // Standard log
 			return
 		}
 		config = cfg
-		log.Println("Configuration loaded successfully.")
+		log.Println("Configuration loaded successfully.") // Standard log
 	})
 	return config, err
 }
@@ -74,7 +84,10 @@ func LoadConfig(filePath string) (*Config, error) {
 // It will panic if LoadConfig has not been called successfully.
 func GetConfig() *Config {
 	if config == nil || err != nil {
-		log.Panicln("Configuration not loaded or loaded with error. Call LoadConfig first.", err)
+		// Use utils.LogFatalf if available and configured, otherwise standard log.Panicln
+		// For simplicity, assuming by the time GetConfig is widely used, logger is set.
+		// However, direct calls to log.Panicln are safer if logger setup could fail.
+		utils.LogFatalf("Configuration not loaded or loaded with error. Call LoadConfig first. Error: %v", err)
 	}
 	return config
 }
@@ -87,12 +100,22 @@ func setDefaultValues(cfg *Config) {
 	cfg.Server.LogLevel = "INFO"
 	cfg.Sui.GasBudget = 100000000 // Default gas budget (adjust as needed)
 	cfg.Sui.RPCURL = "https://fullnode.testnet.sui.io:443" // Default to Sui Testnet
+	cfg.Sui.GameLogicPackageID = "0xYOUR_GAME_LOGIC_PACKAGE_ID_HERE"
+	cfg.Sui.PlayerRegistryPackageID = "0xYOUR_PLAYER_REGISTRY_PACKAGE_ID_HERE"
+	cfg.Sui.ItemSystemPackageID = "0xYOUR_ITEM_SYSTEM_PACKAGE_ID_HERE"
+	cfg.Sui.PlayerObjectPackageID = "0xYOUR_PLAYER_OBJECT_PACKAGE_ID_HERE"
+	cfg.Sui.PlayerObjectModule = "player_profile" // Example default module name
+	// Auth defaults
+	cfg.Auth.EnableDummyAuth = true
+	cfg.Auth.DummyToken = "fixed_dummy_secret_token_123"
+	cfg.Auth.DummyPlayerID = "player_associated_with_dummy_token"
 }
 
 // CreateExampleConfigFile creates an example config.json if it doesn't exist.
 func CreateExampleConfigFile(filePath string) {
 	if _, statErr := os.Stat(filePath); os.IsNotExist(statErr) {
-		log.Printf("Creating example config file at %s\n", filePath)
+		// Using standard log here as well, as this can be called before logger is configured.
+		log.Printf("Creating example config file at %s", filePath)
 		exampleCfg := &Config{}
 		setDefaultValues(exampleCfg) // Populate with defaults
 
@@ -103,17 +126,17 @@ func CreateExampleConfigFile(filePath string) {
 
 		data, marshalErr := json.MarshalIndent(exampleCfg, "", "  ")
 		if marshalErr != nil {
-			log.Printf("Error marshalling example config: %v\n", marshalErr)
+			log.Printf("Error marshalling example config: %v", marshalErr)
 			return
 		}
 
 		if writeErr := os.WriteFile(filePath, data, 0644); writeErr != nil {
-			log.Printf("Error writing example config file %s: %v\n", filePath, writeErr)
+			log.Printf("Error writing example config file %s: %v", filePath, writeErr)
 		} else {
-			log.Printf("Example config file created: %s. Please review and update it.\n", filePath)
+			log.Printf("Example config file created: %s. Please review and update it.", filePath)
 		}
 	} else {
-		log.Printf("Config file %s already exists. Skipping creation of example.\n", filePath)
+		log.Printf("Config file %s already exists. Skipping creation of example.", filePath)
 	}
 }
 

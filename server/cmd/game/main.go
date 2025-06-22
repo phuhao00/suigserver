@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context" // For SUI client health check
 	"log"
 	"os"
 	"os/signal"
+	"strings" // For log level string manipulation
 	"syscall"
 	"time"
 
@@ -11,60 +13,102 @@ import (
 	"github.com/phuhao00/suigserver/server/configs"
 	internalActor "github.com/phuhao00/suigserver/server/internal/actor" // Renamed to avoid conflict with protoactor's actor package
 	"github.com/phuhao00/suigserver/server/internal/network"
+	"github.com/phuhao00/suigserver/server/internal/sui" // Import for SUI client
+	"github.com/phuhao00/suigserver/server/internal/utils" // Import for logger
 	// Other direct service initializations if any (e.g., DB connection pools)
 )
 
 func main() {
-	log.Println("Starting MMO Game Server with Actor Model...")
-
 	// --- Configuration Loading ---
 	// Create an example config if it doesn't exist.
 	// In production, ensure 'config.json' is present and properly configured.
-	configs.CreateExampleConfigFile("config.json")
+	configs.CreateExampleConfigFile("config.json") // This might log using standard logger before ours is set
 	cfg, err := configs.LoadConfig("config.json")
 	if err != nil {
+		// Use standard log here as our logger might not be initialized or config not loaded
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
-	log.Printf("Configuration loaded. Server TCP Port: %d, Sui RPC: %s", cfg.Server.TCPPort, cfg.Sui.RPCURL)
+
+	// --- Initialize Logger ---
+	utils.SetLogLevel(cfg.Server.LogLevel)
+	utils.LogInfo("Starting MMO Game Server with Actor Model...")
+	utils.LogInfof("Configuration loaded. Server TCP Port: %d, Sui RPC: %s, LogLevel: %s", cfg.Server.TCPPort, cfg.Sui.RPCURL, cfg.Server.LogLevel)
 
 	// --- Initialize Actor System ---
+	// Configure Proto.Actor logging
+	actor.SetLogger(&utils.ProtoActorLogAdapter{})
+	switch strings.ToUpper(cfg.Server.LogLevel) {
+	case "DEBUG":
+		actor.SetLogLevel(actor.DebugLog)
+	case "INFO":
+		actor.SetLogLevel(actor.InfoLog)
+	case "WARNING", "WARN":
+		actor.SetLogLevel(actor.WarningLog)
+	case "ERROR":
+		actor.SetLogLevel(actor.ErrorLog)
+	case "FATAL":
+		actor.SetLogLevel(actor.FatalLog)
+	default:
+		actor.SetLogLevel(actor.InfoLog) // Default for actor system if our level is unknown
+	}
+	utils.LogInfo("Proto.Actor logging configured.")
+
 	actorSystem := actor.NewActorSystem()
-	log.Println("Actor system initialized.")
+	utils.LogInfo("Actor system initialized.")
 
 	// --- Spawn Top-Level Actors ---
 	// RoomManagerActor
 	roomManagerProps := internalActor.PropsForRoomManager(actorSystem)
 	named, err := actorSystem.Root.SpawnNamed(roomManagerProps, "room-manager")
+	if err != nil {
+		utils.LogFatalf("Failed to spawn RoomManagerActor: %v", err)
+	}
 	roomManagerPID := named
-	log.Printf("RoomManagerActor spawned with PID: %s", roomManagerPID.String())
+	utils.LogInfof("RoomManagerActor spawned with PID: %s", roomManagerPID.String())
 
 	// Spawn WorldManagerActor
 	worldManagerProps := internalActor.PropsForWorldManager(actorSystem)
-	spawnNamed, err := actorSystem.Root.SpawnNamed(worldManagerProps, "world-manager")
+	spawnNamed, err = actorSystem.Root.SpawnNamed(worldManagerProps, "world-manager")
+	if err != nil {
+		utils.LogFatalf("Failed to spawn WorldManagerActor: %v", err)
+	}
 	worldManagerPID := spawnNamed
-	log.Printf("WorldManagerActor spawned with PID: %s", worldManagerPID.String())
+	utils.LogInfof("WorldManagerActor spawned with PID: %s", worldManagerPID.String())
 
 	// TODO: Spawn other top-level actors as needed (e.g., PlayerDataManagerActor, GameEventManagerActor)
-	log.Println("Placeholder: Additional top-level actors (PlayerDataManager, GameEventManager) would be spawned here if defined.")
-	// Example for DBCacheLayer (if it were an actor, or if its lifecycle is managed here)
-	// dbConfig := game.DBConfig{Host: "localhost", Port: 5432, User: "user", Password: "password", DBName: "gamedb", SSLMode: "disable"}
-	// redisConfig := game.RedisConfig{Addr: "localhost:6379"}
-	// dbCacheLayer, err := game.NewDBCacheLayer(dbConfig, redisConfig)
-	// if err != nil {
-	// 	log.Fatalf("Failed to initialize DBCacheLayer: %v", err)
-	// }
-	// if err := dbCacheLayer.Start(); err != nil {
-	// 	log.Fatalf("Failed to start DBCacheLayer: %v", err)
-	// }
-	// defer dbCacheLayer.Stop() // Ensure it's stopped on shutdown
+	utils.LogInfo("Placeholder: Additional top-level actors (PlayerDataManager, GameEventManager) would be spawned here if defined.")
 
-	// Example for Sui Client (if used directly by TCPServer or other services not actors)
-	// suiClient := sui.NewClient(cfg.Sui.RPCURL, cfg.Sui.PrivateKey) // Assuming NewClient exists
-	// log.Println("Sui client initialized.")
+	// --- Initialize SUI Client ---
+	suiClient := sui.NewSuiClient(cfg.Sui.RPCURL) // Using the modern SuiClient
+	utils.LogInfof("SUI client initialized for RPC URL: %s", cfg.Sui.RPCURL)
+	if cfg.Sui.PrivateKey != "" && cfg.Sui.PrivateKey != "YOUR_SUI_PRIVATE_KEY_HEX_HERE" {
+		utils.LogInfo("SUI private key loaded and available for server-side transaction signing.")
+	} else {
+		utils.LogWarn("SUI private key is not configured or is using the default placeholder. Server-side SUI transactions requiring this key will not be possible.")
+	}
+	// Perform SUI client health check
+	go func() {
+		time.Sleep(2 * time.Second) // Brief delay to allow server to fully start before check
+		chainID, err := suiClient.SuiGetChainIdentifier(context.Background())
+		if err != nil {
+			utils.LogErrorf("SUI client health check failed: Error getting chain identifier: %v", err)
+		} else {
+			utils.LogInfof("SUI client health check successful. Connected to chain: %s", chainID)
+		}
+	}()
 
 	// --- Initialize Network Server ---
-	// TCPServer now also needs WorldManagerPID to pass to PlayerSessionActors
-	tcpServer := network.NewTCPServer(cfg.Server.TCPPort, actorSystem, roomManagerPID, worldManagerPID)
+	// TCPServer now also needs WorldManagerPID, suiClient, and Auth configs to pass to PlayerSessionActors
+	tcpServer := network.NewTCPServer(
+		cfg.Server.TCPPort,
+		actorSystem,
+		roomManagerPID,
+		worldManagerPID,
+		suiClient,
+		cfg.Auth.EnableDummyAuth,
+		cfg.Auth.DummyToken,
+		cfg.Auth.DummyPlayerID,
+	)
 	if err := tcpServer.Start(); err != nil {
 		log.Fatalf("Failed to start TCP server: %v", err)
 	}

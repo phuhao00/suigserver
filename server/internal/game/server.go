@@ -1,3 +1,8 @@
+// DEPRECATED: This file contains a simplified, non-actor based TCP server implementation.
+// The main game server (`server/cmd/game/main.go`) uses an actor-based architecture
+// with network handling in `server/internal/network/` and session management in `server/internal/actor/`.
+// This file is kept for reference or potential alternative uses but is not part of the active game server.
+
 package game
 
 import (

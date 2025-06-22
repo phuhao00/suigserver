@@ -3,7 +3,7 @@ package network
 import (
 	"bufio"
 	"io"
-	"log"
+	// "log" // Replaced by utils.LogX
 	"net"
 	"strconv"
 	"sync"
@@ -13,6 +13,8 @@ import (
 	"github.com/asynkron/protoactor-go/actor"
 	sessionactor "github.com/phuhao00/suigserver/server/internal/actor" // Alias for the actor package
 	"github.com/phuhao00/suigserver/server/internal/actor/messages"
+	"github.com/phuhao00/suigserver/server/internal/sui" // For sui.SuiClient
+	"github.com/phuhao00/suigserver/server/internal/utils" // Logger
 )
 
 const (
@@ -31,26 +33,49 @@ type TCPServer struct {
 	actorSystem     *actor.ActorSystem
 	wg              sync.WaitGroup
 	shutdown        chan struct{}
-	roomManagerPID  *actor.PID // PID of the RoomManagerActor
-	worldManagerPID *actor.PID // PID of the WorldManagerActor, to be passed to SessionActor
+	roomManagerPID  *actor.PID    // PID of the RoomManagerActor
+	worldManagerPID *actor.PID    // PID of the WorldManagerActor
+	suiClient       *sui.SuiClient // SUI client instance
+	// Auth Configs
+	enableDummyAuth bool
+	dummyToken      string
+	dummyPlayerID   string
 }
 
 // NewTCPServer creates a new TCPServer.
-// It now requires worldManagerPID.
-func NewTCPServer(port int, system *actor.ActorSystem, roomManagerPID *actor.PID, worldManagerPID *actor.PID) *TCPServer {
-	log.Printf("Initializing TCP Server for port %d...\n", port)
+// It now requires worldManagerPID, suiClient, and dummy auth configurations.
+func NewTCPServer(
+	port int,
+	system *actor.ActorSystem,
+	roomManagerPID *actor.PID,
+	worldManagerPID *actor.PID,
+	suiClient *sui.SuiClient,
+	enableDummyAuth bool,
+	dummyToken string,
+	dummyPlayerID string,
+) *TCPServer {
+	utils.LogInfof("Initializing TCP Server for port %d...", port)
 	if roomManagerPID == nil {
-		log.Panicf("TCPServer: RoomManagerPID cannot be nil")
+		utils.LogFatalf("TCPServer: RoomManagerPID cannot be nil")
 	}
 	if worldManagerPID == nil {
-		log.Panicf("TCPServer: WorldManagerPID cannot be nil")
+		utils.LogFatalf("TCPServer: WorldManagerPID cannot be nil")
 	}
+	if suiClient == nil {
+		utils.LogFatalf("TCPServer: suiClient cannot be nil")
+	}
+	// Note: dummyToken and dummyPlayerID can be empty if enableDummyAuth is false.
+	// Add checks if they must be non-empty when enableDummyAuth is true, if necessary.
 	return &TCPServer{
 		port:            port,
 		actorSystem:     system,
 		shutdown:        make(chan struct{}),
 		roomManagerPID:  roomManagerPID,
 		worldManagerPID: worldManagerPID,
+		suiClient:       suiClient,
+		enableDummyAuth: enableDummyAuth,
+		dummyToken:      dummyToken,
+		dummyPlayerID:   dummyPlayerID,
 	}
 }
 
@@ -60,10 +85,10 @@ func (s *TCPServer) Start() error {
 	var err error
 	s.listener, err = net.Listen("tcp", listenAddr)
 	if err != nil {
-		log.Printf("Error starting TCP server on port %d: %v\n", s.port, err)
+		utils.LogErrorf("Error starting TCP server on port %d: %v", s.port, err)
 		return err
 	}
-	log.Printf("TCP Server started and listening on %s\n", listenAddr)
+	utils.LogInfof("TCP Server started and listening on %s", listenAddr)
 
 	s.wg.Add(1)
 	go s.acceptConnections()
@@ -73,24 +98,24 @@ func (s *TCPServer) Start() error {
 
 func (s *TCPServer) acceptConnections() {
 	defer s.wg.Done()
-	log.Println("TCP accept loop started.")
+	utils.LogInfo("TCP accept loop started.")
 	for {
 		conn, err := s.listener.Accept()
 		if err != nil {
 			select {
 			case <-s.shutdown:
-				log.Println("TCP accept loop shutting down.")
+				utils.LogInfo("TCP accept loop shutting down.")
 				return
 			default:
-				log.Printf("Error accepting connection: %v\n", err)
+				utils.LogWarnf("Error accepting connection: %v", err)
 				if ne, ok := err.(net.Error); ok && !ne.Temporary() {
-					log.Printf("Permanent error in accept: %v. Shutting down accept loop.", err)
+					utils.LogErrorf("Permanent error in accept: %v. Shutting down accept loop.", err)
 					return
 				}
 				continue
 			}
 		}
-		log.Printf("Accepted new connection from %s\n", conn.RemoteAddr())
+		utils.LogInfof("Accepted new connection from %s", conn.RemoteAddr())
 
 		s.wg.Add(1)
 		// Each connection will have its own actor to manage its lifecycle and communication.
@@ -106,26 +131,36 @@ func (s *TCPServer) acceptConnections() {
 // and then mainly acts as a bridge for reading from the socket and writing to it.
 func (s *TCPServer) handleConnection(conn net.Conn) {
 	defer s.wg.Done() // Decrement counter when this connection handler exits
+	clientAddr := conn.RemoteAddr().String()
+	utils.LogDebugf("Handling new connection for %s", clientAddr)
 
-	// TODO: Replace with actual PlayerSessionActor props once defined in actors package
-	// playerSessionProps := actor.PropsFromProducer(func() actor.Actor { return actors.NewPlayerSessionActor(conn, s.actorSystem) })
-	// The above line is incorrect as actors should not be passed `conn` directly in constructor usually,
-	// but rather receive it via a message after starting.
+	// Note: PlayerSessionActor props are now used directly.
+	// The old TODO about replacing them was based on an earlier structure.
 	if s.roomManagerPID == nil {
-		log.Panicf("[%s] CRITICAL: RoomManagerPID is not set in TCPServer. Cannot spawn PlayerSessionActor correctly.", conn.RemoteAddr())
-		// conn.Close() - Panicking, so this won't be reached.
+		utils.LogFatalf("[%s] CRITICAL: RoomManagerPID is not set in TCPServer. Cannot spawn PlayerSessionActor correctly.", clientAddr)
 		return
 	}
 	if s.worldManagerPID == nil {
-		log.Panicf("[%s] CRITICAL: WorldManagerPID is not set in TCPServer. Cannot spawn PlayerSessionActor correctly.", conn.RemoteAddr())
-		// conn.Close() - Panicking, so this won't be reached.
+		utils.LogFatalf("[%s] CRITICAL: WorldManagerPID is not set in TCPServer. Cannot spawn PlayerSessionActor correctly.", clientAddr)
+		return
+	}
+	if s.suiClient == nil {
+		utils.LogFatalf("[%s] CRITICAL: SuiClient is not set in TCPServer. Cannot spawn PlayerSessionActor correctly.", clientAddr)
 		return
 	}
 
-	// PlayerSessionActor now requires worldManagerPID as well.
-	playerSessionProps := sessionactor.Props(s.actorSystem, s.roomManagerPID, s.worldManagerPID)
+	// PlayerSessionActor now requires worldManagerPID, suiClient, and auth configs.
+	playerSessionProps := sessionactor.Props(
+		s.actorSystem,
+		s.roomManagerPID,
+		s.worldManagerPID,
+		s.suiClient,
+		s.enableDummyAuth,
+		s.dummyToken,
+		s.dummyPlayerID,
+	)
 	playerSessionPID := s.actorSystem.Root.Spawn(playerSessionProps)
-	log.Printf("[%s] Spawned PlayerSessionActor with PID: %s", conn.RemoteAddr(), playerSessionPID.String())
+	utils.LogInfof("[%s] Spawned PlayerSessionActor with PID: %s", clientAddr, playerSessionPID.String())
 
 	// Send ClientConnected message to the PlayerSessionActor
 	// This message includes the net.Conn so the actor can use it.
@@ -151,12 +186,12 @@ func (s *TCPServer) handleConnection(conn net.Conn) {
 
 		// 2. Validate message length
 		if messageLength == 0 {
-			log.Printf("[%s] Received message with zero length. Ignoring.", conn.RemoteAddr())
+			utils.LogWarnf("[%s] Received message with zero length. Ignoring.", clientAddr)
 			continue // Or treat as an error/disconnect
 		}
 		if messageLength > MaxMessageSize {
-			log.Printf("[%s] Message length %d exceeds MaxMessageSize %d. Closing connection.",
-				conn.RemoteAddr(), messageLength, MaxMessageSize)
+			utils.LogWarnf("[%s] Message length %d exceeds MaxMessageSize %d. Closing connection.",
+				clientAddr, messageLength, MaxMessageSize)
 			s.actorSystem.Root.Send(playerSessionPID, &messages.ClientDisconnected{Reason: "Message too large"})
 			conn.Close()
 			return
@@ -166,25 +201,25 @@ func (s *TCPServer) handleConnection(conn net.Conn) {
 		payloadBuf := make([]byte, messageLength)
 		_, err = io.ReadFull(conn, payloadBuf)
 		if err != nil {
-			s.handleReadError(conn, playerSessionPID, err, "reading payload")
+			s.handleReadError(conn, playerSessionPID, err, "reading payload") // handleReadError uses utils.Log
 			return
 		}
 
-		log.Printf("[%s] Received %d bytes. Payload: '%s'\n", conn.RemoteAddr(), messageLength, string(payloadBuf))
+		utils.LogDebugf("[%s] Received %d bytes. Payload: '%s'", clientAddr, messageLength, string(payloadBuf))
 
 		if playerSessionPID != nil {
 			// The payloadBuf is what PlayerSessionActor expects (e.g., JSON string)
 			s.actorSystem.Root.Send(playerSessionPID, &messages.ClientMessage{Payload: payloadBuf})
 		} else {
 			// This case should ideally not be reached if PIDs are managed correctly
-			log.Printf("[%s] Warning: No PlayerSessionPID. Cannot process message.", conn.RemoteAddr())
+			utils.LogWarnf("[%s] Warning: No PlayerSessionPID. Cannot process message.", clientAddr)
 			// Not echoing back anymore as the protocol is more defined.
 		}
 
 		// Check for server shutdown signal
 		select {
 		case <-s.shutdown:
-			log.Printf("[%s] Server shutting down, closing connection handler.", conn.RemoteAddr())
+			utils.LogInfof("[%s] Server shutting down, closing connection handler.", clientAddr)
 			if playerSessionPID != nil {
 				s.actorSystem.Root.Send(playerSessionPID, &messages.ClientDisconnected{Reason: "Server shutdown"})
 			}
@@ -197,15 +232,16 @@ func (s *TCPServer) handleConnection(conn net.Conn) {
 }
 
 func (s *TCPServer) handleReadError(conn net.Conn, sessionPID *actor.PID, err error, context string) {
+	clientAddr := conn.RemoteAddr().String()
 	errMsg := ""
 	if err == io.EOF {
-		log.Printf("[%s] Connection closed by client (EOF) while %s.\n", conn.RemoteAddr(), context)
+		utils.LogInfof("[%s] Connection closed by client (EOF) while %s.", clientAddr, context)
 		errMsg = "EOF"
 	} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
-		log.Printf("[%s] Connection timeout while %s.\n", conn.RemoteAddr(), context)
+		utils.LogWarnf("[%s] Connection timeout while %s.", clientAddr, context)
 		errMsg = "Timeout"
 	} else {
-		log.Printf("[%s] Error reading from connection while %s: %v\n", conn.RemoteAddr(), context, err)
+		utils.LogErrorf("[%s] Error reading from connection while %s: %v", clientAddr, context, err)
 		errMsg = err.Error()
 	}
 
@@ -217,17 +253,17 @@ func (s *TCPServer) handleReadError(conn net.Conn, sessionPID *actor.PID, err er
 
 // Stop gracefully shuts down the TCP server.
 func (s *TCPServer) Stop() {
-	log.Println("Attempting to stop TCP Server...")
+	utils.LogInfo("Attempting to stop TCP Server...")
 	close(s.shutdown) // Signal all goroutines (acceptConnections, handleConnection) to stop
 
 	if s.listener != nil {
 		if err := s.listener.Close(); err != nil { // This will cause Accept() to return an error
-			log.Printf("Error closing TCP listener: %v\n", err)
+			utils.LogErrorf("Error closing TCP listener: %v", err)
 		} else {
-			log.Println("TCP listener closed.")
+			utils.LogInfo("TCP listener closed.")
 		}
 	} else {
-		log.Println("TCP listener was not active or already closed.")
+		utils.LogInfo("TCP listener was not active or already closed.")
 	}
 
 	// Wait for all connection handlers and the accept loop goroutine to finish.
@@ -240,11 +276,11 @@ func (s *TCPServer) Stop() {
 
 	select {
 	case <-shutdownCompleted:
-		log.Println("TCP Server all goroutines finished.")
+		utils.LogInfo("TCP Server all goroutines finished.")
 	case <-time.After(10 * time.Second): // Timeout for graceful shutdown
-		log.Println("TCP Server shutdown timed out waiting for goroutines.")
+		utils.LogWarn("TCP Server shutdown timed out waiting for goroutines.")
 	}
-	log.Println("TCP Server stopped successfully.")
+	utils.LogInfo("TCP Server stopped successfully.")
 }
 
 // trimNewlineCharsBytes is no longer needed with length-prefixing, but kept for reference if other parts use it.
