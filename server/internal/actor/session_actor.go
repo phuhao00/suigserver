@@ -1,22 +1,23 @@
 package actor
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"strings" // For basic message parsing, will be replaced by proper protocol
 
 	"github.com/asynkron/protoactor-go/actor"
-	"sui-mmo-server/server/internal/actor/messages"
+	"github.com/phuhao00/suigserver/server/internal/actor/messages"
 	// "sui-mmo-server/server/internal/models" // For player data
 )
 
 // PlayerSessionActor manages a single client's connection and game session.
 type PlayerSessionActor struct {
-	conn        net.Conn
-	actorSystem *actor.ActorSystem // To interact with other actors
-	playerID       string     // Set after authentication
-	roomPID        *actor.PID // PID of the room the player is currently in
-	roomManagerPID *actor.PID // PID of the RoomManagerActor
+	conn           net.Conn
+	actorSystem    *actor.ActorSystem // To interact with other actors
+	playerID       string             // Set after authentication
+	roomPID        *actor.PID         // PID of the room the player is currently in
+	roomManagerPID *actor.PID         // PID of the RoomManagerActor
 	// other player-specific state
 }
 
@@ -53,7 +54,6 @@ func (a *PlayerSessionActor) Receive(ctx actor.Context) {
 		// Example: Send a welcome message to the client
 		welcomeMsg := &messages.ForwardToClient{Payload: []byte("Welcome to the MMO Server! Please authenticate.\n")}
 		a.handleForwardToClient(welcomeMsg)
-
 
 	case *messages.ClientMessage:
 		log.Printf("[%s] Received ClientMessage: %s", ctx.Self().Id, string(msg.Payload))
@@ -193,7 +193,7 @@ func (a *PlayerSessionActor) handleClientPayload(ctx actor.Context, payload []by
 			// Send FindRoomRequest to RoomManagerActor
 			// The criteria could be more complex, here we use roomID as the criteria.
 			ctx.Request(a.roomManagerPID, &messages.FindRoomRequest{
-				Criteria: roomID, // Player is requesting a specific room ID
+				Criteria:  roomID, // Player is requesting a specific room ID
 				PlayerPID: ctx.Self(),
 			})
 			// The response (FindRoomResponse) will be handled in this actor's Receive method.

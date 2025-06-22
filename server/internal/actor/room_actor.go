@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/asynkron/protoactor-go/actor"
-	"sui-mmo-server/server/internal/actor/messages"
+	"github.com/phuhao00/suigserver/server/internal/actor/messages"
 	// "sui-mmo-server/server/internal/models" // For Room model if needed
 )
 

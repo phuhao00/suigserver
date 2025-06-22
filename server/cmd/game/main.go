@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/asynkron/protoactor-go/actor"
-	"sui-mmo-server/server/configs"
-	internalActor "sui-mmo-server/server/internal/actor" // Renamed to avoid conflict with protoactor's actor package
-	"sui-mmo-server/server/internal/network"
+	"github.com/phuhao00/suigserver/server/configs"
+	internalActor "github.com/phuhao00/suigserver/server/internal/actor" // Renamed to avoid conflict with protoactor's actor package
+	"github.com/phuhao00/suigserver/server/internal/network"
 	// Other direct service initializations if any (e.g., DB connection pools)
 )
 

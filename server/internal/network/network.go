@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/asynkron/protoactor-go/actor"
-	"sui-mmo-server/server/internal/actor/messages"
-	sessionactor "sui-mmo-server/server/internal/actor" // Alias for the actor package
+	sessionactor "github.com/phuhao00/suigserver/server/internal/actor" // Alias for the actor package
+	"github.com/phuhao00/suigserver/server/internal/actor/messages"
 )
 
 // TCPServer manages TCP client connections and interfaces with the actor system.

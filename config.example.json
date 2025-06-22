@@ -1,0 +1,22 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "tcpPort": 8080,
+    "httpPort": 8081,
+    "logLevel": "INFO"
+  },
+  "database": {
+    "postgresUrl": "postgresql://user:password@localhost:5432/mmo_db?sslmode=disable"
+  },
+  "redis": {
+    "address": "localhost:6379",
+    "password": "",
+    "db": 0
+  },
+  "sui": {
+    "rpcUrl": "https://fullnode.testnet.sui.io:443",
+    "websocketUrl": "wss://fullnode.testnet.sui.io:443",
+    "privateKey": "YOUR_SUI_PRIVATE_KEY_HEX_HERE",
+    "gasBudget": 100000000
+  }
+}

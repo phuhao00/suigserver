@@ -1,0 +1,13 @@
+{
+  "sui_node_url": "https://fullnode.testnet.sui.io:443",
+  "package_id": "0x0000000000000000000000000000000000000000000000000000000000000000",
+  "marketplace_object_id": "0x0000000000000000000000000000000000000000000000000000000000000000",
+  "admin_cap_id": "0x0000000000000000000000000000000000000000000000000000000000000000",
+  "module": "marketplace",
+  "default_gas_budget": 1000000,
+  "max_listing_duration_hours": 168,
+  "enable_caching": true,
+  "cache_expiration_seconds": 300,
+  "rate_limit_enabled": true,
+  "rate_limit_per_minute": 100
+}

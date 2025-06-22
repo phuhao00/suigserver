@@ -1,0 +1,11 @@
+[package]
+name = "combat_system"
+edition = "2024.beta"
+version = "1.0.0"
+
+[dependencies]
+Sui = { local = "C:\\Users\\HHaou\\.move\\sui\\crates\\sui-framework\\packages\\sui-framework" }
+#Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "framework/testnet" }
+
+[addresses]
+mmo_game = "0x0"

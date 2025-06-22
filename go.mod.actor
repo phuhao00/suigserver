@@ -1,0 +1,15 @@
+module github.com/phuhao00/suigserver
+
+go 1.21
+
+require (
+	github.com/asynkron/protoactor-go v0.0.0-20220914112455-01d5e2d21527
+	github.com/go-resty/resty/v2 v2.7.0
+	github.com/tidwall/gjson v1.14.4
+)
+
+// Use this version when dependencies are available
+// To use this version:
+// 1. Rename this file to go.mod (backup the current simple go.mod)
+// 2. Run: go mod tidy
+// 3. Build with: go build -o bin/game-server.exe server/cmd/game/main.go
