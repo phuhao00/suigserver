@@ -382,9 +382,54 @@ func NewClient() (*Client, error) {
 	}, nil
 }
 
-func (c *Client) CallMoveFunction(module, funcName string, args []interface{}) (interface{}, error) {
-	log.Printf("Call Move: %s::%s, args=%v\n", module, funcName, args)
-	// TODO: Implement with actual sender, package ID, etc.
-	// This is a placeholder for backward compatibility
-	return nil, nil
+// CallMoveFunction is a simplified wrapper around unsafe_moveCall.
+// It requires senderAddress, packageID, and gasObjectID to be configured or passed.
+// This function is a placeholder and needs proper parameters for actual use.
+func (c *Client) CallMoveFunction(
+	senderAddress string, // Example: "0xYOUR_SENDER_ADDRESS"
+	packageID string,     // Example: "0xYOUR_PACKAGE_ID"
+	module string,
+	functionName string,
+	typeArgs []string,    // Specific type arguments for the Move function, if any
+	callArgs []interface{}, // Arguments for the Move function
+	gasObjectID string,   // Object ID of the gas coin to be used for payment
+	gasBudget uint64,     // Budget for gas in MIST
+) (gjson.Result, error) {
+	log.Printf("Calling Move function: Package=%s, Module=%s, Function=%s, Sender=%s", packageID, module, functionName, senderAddress)
+	log.Printf("Type Args: %v", typeArgs)
+	log.Printf("Call Args: %v", callArgs)
+	log.Printf("Gas Object: %s, Gas Budget: %d", gasObjectID, gasBudget)
+
+	if senderAddress == "" || packageID == "" || gasObjectID == "" {
+		errMsg := "senderAddress, packageID, and gasObjectID must be provided for CallMoveFunction"
+		log.Println(errMsg)
+		return gjson.Result{}, fmt.Errorf(errMsg)
+	}
+	if gasBudget == 0 {
+		gasBudget = 10000000 // Default gas budget if not specified, e.g., 0.01 SUI
+		log.Printf("Using default gas budget: %d", gasBudget)
+	}
+
+	// The `unsafe_moveCall` expects arguments to be in specific formats (e.g., strings for object IDs).
+	// Ensure `callArgs` are properly formatted based on the target Move function's signature.
+	// For example, object IDs should be strings, numbers as strings or numbers based on type, etc.
+
+	// This uses the embedded SuiClient's MoveCall method.
+	result, err := c.SuiClient.MoveCall(senderAddress, packageID, module, functionName, typeArgs, callArgs, gasObjectID, gasBudget)
+	if err != nil {
+		log.Printf("Error calling Move function %s::%s::%s: %v. Raw Response: %s", packageID, module, functionName, err, result.Raw)
+		return result, fmt.Errorf("MoveCall failed for %s::%s: %w", module, functionName, err)
+	}
+
+	log.Printf("Move function %s::%s::%s called successfully. Digest: %s", packageID, module, functionName, result.Get("digest").String())
+	// The result from unsafe_moveCall is a JSON object containing txBytes, gas summary, and input objects.
+	// To get the actual effects or created objects, this transaction needs to be signed and executed
+	// via `sui_executeTransactionBlock`. This function only prepares the transaction.
+	// For a complete flow, one might:
+	// 1. Call `unsafe_moveCall` (or `sui_DevInspectTransactionBlock` for simulation).
+	// 2. Get `txBytes` from the response.
+	// 3. Sign `txBytes` using the sender's private key (client-side or secure enclave).
+	// 4. Call `sui_executeTransactionBlock` with signed transaction.
+	// This simplified `CallMoveFunction` does not perform signing or execution.
+	return result, nil
 }

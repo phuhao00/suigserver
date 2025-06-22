@@ -13,8 +13,18 @@ import (
 type RoomManagerActor struct {
 	actorSystem *actor.ActorSystem
 	rooms       map[string]*actor.PID // Map RoomID to RoomActor PID
-	mu          sync.RWMutex          // To protect concurrent access to the rooms map
+	roomInfo    map[string]RoomInfo   // Map RoomID to RoomInfo (name, maxPlayers, currentPlayers)
+	mu          sync.RWMutex          // To protect concurrent access to the rooms map and roomInfo
 	nextRoomNum int                   // For generating unique room IDs if not provided
+}
+
+// RoomInfo holds metadata about a room.
+type RoomInfo struct {
+	ID             string
+	Name           string
+	MaxPlayers     int
+	CurrentPlayers int
+	PID            *actor.PID
 }
 
 // NewRoomManagerActor creates a new RoomManagerActor.
@@ -22,6 +32,7 @@ func NewRoomManagerActor(system *actor.ActorSystem) actor.Actor {
 	return &RoomManagerActor{
 		actorSystem: system,
 		rooms:       make(map[string]*actor.PID),
+		roomInfo:    make(map[string]RoomInfo),
 		nextRoomNum: 1,
 	}
 }
@@ -32,11 +43,7 @@ func (a *RoomManagerActor) Receive(ctx actor.Context) {
 	case *actor.Started:
 		log.Printf("[RoomManagerActor %s] Started.", ctx.Self().Id)
 		// Example: Pre-spawn a default room
-		// defaultRoomID := "default_lobby"
-		// defaultRoomProps := Props(defaultRoomID, "Default Lobby", 50, a.actorSystem) // Using RoomActor's Props
-		// defaultRoomPID := ctx.SpawnNamed(defaultRoomProps, "room-"+defaultRoomID)
-		// a.rooms[defaultRoomID] = defaultRoomPID
-		// log.Printf("[RoomManagerActor %s] Pre-spawned default room '%s' with PID %s", ctx.Self().Id, defaultRoomID, defaultRoomPID.Id)
+		// a.createDefaultRoom(ctx)
 
 	case *actor.Stopping:
 		log.Printf("[RoomManagerActor %s] Stopping. Stopping all managed rooms...", ctx.Self().Id)
@@ -56,14 +63,42 @@ func (a *RoomManagerActor) Receive(ctx actor.Context) {
 	case *messages.FindRoomRequest:
 		a.handleFindRoomRequest(ctx, msg)
 
-		// TODO: Add message for when a RoomActor stops, so RoomManager can clean it up from the map.
-		// This typically involves the RoomActor sending a Terminated message to its parent/watcher (RoomManagerActor).
-		// case *actor.Terminated:
-		//     a.handleRoomTerminated(ctx, msg)
+	case *actor.Terminated:
+		// This message is received when a child/watched actor stops.
+		a.handleRoomTerminated(ctx, msg)
+
+	case *messages.UpdateRoomPlayerCount:
+		a.handleUpdateRoomPlayerCount(ctx, msg)
 
 	default:
-		log.Printf("[RoomManagerActor %s] Received unknown message: %+v", ctx.Self().Id, msg)
+		log.Printf("[RoomManagerActor %s] Received unknown message: %T %+v", ctx.Self().Id, msg, msg)
 	}
+}
+
+// createDefaultRoom is an example helper to pre-spawn a room.
+func (a *RoomManagerActor) createDefaultRoom(ctx actor.Context) {
+	defaultRoomID := "lobby"
+	roomName := "Default Lobby"
+	maxPlayers := 50
+
+	// Use RoomActor's Props function (ensure RoomActor.Props is defined and accessible)
+	// Assuming RoomActor.Props exists like: func Props(roomID, roomName string, maxPlayers int, actorSystem *actor.ActorSystem, roomManagerPID *actor.PID) *actor.Props
+	roomProps := Props(defaultRoomID, roomName, maxPlayers, a.actorSystem, ctx.Self())
+	roomPID := ctx.SpawnNamed(roomProps, "room-"+defaultRoomID)
+
+	a.mu.Lock()
+	a.rooms[defaultRoomID] = roomPID
+	a.roomInfo[defaultRoomID] = RoomInfo{
+		ID:             defaultRoomID,
+		Name:           roomName,
+		MaxPlayers:     maxPlayers,
+		CurrentPlayers: 0, // Initially empty
+		PID:            roomPID,
+	}
+	a.mu.Unlock()
+
+	ctx.Watch(roomPID) // Watch the room actor for termination
+	log.Printf("[RoomManagerActor %s] Pre-spawned default room '%s' (ID: %s, PID: %s)", ctx.Self().Id, roomName, defaultRoomID, roomPID.Id)
 }
 
 func (a *RoomManagerActor) handleCreateRoomRequest(ctx actor.Context, msg *messages.CreateRoomRequest) {
@@ -78,7 +113,7 @@ func (a *RoomManagerActor) handleCreateRoomRequest(ctx actor.Context, msg *messa
 
 	if _, exists := a.rooms[roomID]; exists {
 		log.Printf("[RoomManagerActor %s] Room %s already exists.", ctx.Self().Id, roomID)
-		if msg.RequesterPID != nil { // Check if a response is expected
+		if msg.RequesterPID != nil {
 			ctx.Send(msg.RequesterPID, &messages.CreateRoomResponse{
 				RoomID:  roomID,
 				Success: false,
@@ -97,17 +132,19 @@ func (a *RoomManagerActor) handleCreateRoomRequest(ctx actor.Context, msg *messa
 		maxPlayers = 10 // Default max players
 	}
 
-	// Use RoomActor's Props function
-	roomProps := Props(roomID, roomName, maxPlayers, a.actorSystem)
-	// Spawn the RoomActor as a child of RoomManagerActor for supervision, or use ctx.Spawn/ctx.SpawnNamed for system-level.
-	// Spawning as child: roomPID := ctx.SpawnChild(roomProps, "room-"+roomID)
-	// Spawning at root level (or context of where RoomManager is, if not root):
-	roomPID := ctx.SpawnNamed(roomProps, "room-"+roomID) // Name must be unique system-wide for SpawnNamed at root
-	// To ensure unique names if not child, could use: roomPID := ctx.Spawn(roomProps) and then the name is auto-generated.
-	// If using SpawnNamed, ensure "room-"+roomID is unique or it will panic.
+	// Pass RoomManager's PID (ctx.Self()) to the RoomActor so it can send updates (e.g. player count)
+	roomProps := Props(roomID, roomName, maxPlayers, a.actorSystem, ctx.Self())
+	roomPID := ctx.SpawnNamed(roomProps, "room-"+roomID) // Ensure "room-"+roomID is unique
 
 	a.rooms[roomID] = roomPID
-	// ctx.Watch(roomPID) // Watch the child room actor for termination
+	a.roomInfo[roomID] = RoomInfo{
+		ID:             roomID,
+		Name:           roomName,
+		MaxPlayers:     maxPlayers,
+		CurrentPlayers: 0, // New room starts with 0 players
+		PID:            roomPID,
+	}
+	ctx.Watch(roomPID) // Watch the child room actor for termination
 
 	log.Printf("[RoomManagerActor %s] Created room '%s' (ID: %s, PID: %s) with max players %d.",
 		ctx.Self().Id, roomName, roomID, roomPID.Id, maxPlayers)
@@ -125,48 +162,60 @@ func (a *RoomManagerActor) handleFindRoomRequest(ctx actor.Context, msg *message
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
-	// TODO: Implement actual finding logic based on msg.Criteria.
-	// For now, just returns the first available room or a specific one if ID is in criteria.
-	var foundRoomID string
-	var foundRoomPID *actor.PID
+	var foundRoom RoomInfo
+	found := false
 
-	// Example: if criteria is a string, assume it's a roomID
-	if roomIDCriterion, ok := msg.Criteria.(string); ok {
-		if pid, exists := a.rooms[roomIDCriterion]; exists {
-			foundRoomID = roomIDCriterion
-			foundRoomPID = pid
+	// Attempt to find by specific ID if criteria is a string
+	if roomIDCriterion, ok := msg.Criteria.(string); ok && roomIDCriterion != "" {
+		if info, exists := a.roomInfo[roomIDCriterion]; exists {
+			// Check if room is full (basic check, RoomActor itself is the source of truth for instantaneous count)
+			if info.CurrentPlayers < info.MaxPlayers {
+				foundRoom = info
+				found = true
+			} else {
+				log.Printf("[RoomManagerActor %s] Room %s found but is full (%d/%d players).", ctx.Self().Id, info.ID, info.CurrentPlayers, info.MaxPlayers)
+				if msg.PlayerPID != nil {
+					ctx.Send(msg.PlayerPID, &messages.FindRoomResponse{
+						Found: false,
+						Error: fmt.Sprintf("Room '%s' is full.", info.Name),
+					})
+				}
+				return // Early exit as specific room is full
+			}
 		}
 	} else {
-		// Fallback: find first room (not a good strategy for production)
-		for id, pid := range a.rooms {
-			// TODO: Could check if room is not full by querying the RoomActor (would be async)
-			foundRoomID = id
-			foundRoomPID = pid
-			break
+		// Fallback: find the first available non-full room (simple matchmaking)
+		// More sophisticated matchmaking would consider criteria like game mode, map, player rank etc.
+		for _, info := range a.roomInfo {
+			if info.CurrentPlayers < info.MaxPlayers {
+				foundRoom = info
+				found = true
+				break // Found a suitable room
+			}
 		}
 	}
 
-	if foundRoomPID != nil {
-		log.Printf("[RoomManagerActor %s] Found room %s (PID: %s) for player %s.", ctx.Self().Id, foundRoomID, foundRoomPID.Id, msg.PlayerPID.Id)
+	if found {
+		log.Printf("[RoomManagerActor %s] Found room %s (Name: %s, PID: %s) for player %s. Players: %d/%d.",
+			ctx.Self().Id, foundRoom.ID, foundRoom.Name, foundRoom.PID.Id, msg.PlayerPID.Id, foundRoom.CurrentPlayers, foundRoom.MaxPlayers)
 		if msg.PlayerPID != nil {
 			ctx.Send(msg.PlayerPID, &messages.FindRoomResponse{
-				RoomID:  foundRoomID,
-				RoomPID: foundRoomPID,
+				RoomID:  foundRoom.ID,
+				RoomPID: foundRoom.PID,
 				Found:   true,
 			})
 		}
 	} else {
-		log.Printf("[RoomManagerActor %s] No suitable room found for player %s.", ctx.Self().Id, msg.PlayerPID.Id)
+		log.Printf("[RoomManagerActor %s] No suitable room found for player %s with criteria '%v'.", ctx.Self().Id, msg.PlayerPID.Id, msg.Criteria)
 		if msg.PlayerPID != nil {
 			ctx.Send(msg.PlayerPID, &messages.FindRoomResponse{
 				Found: false,
-				Error: "No suitable room found.",
+				Error: "No suitable room found or the specified room is full/does not exist.",
 			})
 		}
 	}
 }
 
-/*
 func (a *RoomManagerActor) handleRoomTerminated(ctx actor.Context, terminated *actor.Terminated) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -174,12 +223,26 @@ func (a *RoomManagerActor) handleRoomTerminated(ctx actor.Context, terminated *a
 	for roomID, roomPID := range a.rooms {
 		if roomPID.Equal(terminated.Who) {
 			delete(a.rooms, roomID)
+			delete(a.roomInfo, roomID)
 			log.Printf("[RoomManagerActor %s] Room %s (PID: %s) terminated and removed from manager.", ctx.Self().Id, roomID, terminated.Who.Id)
+			// No need to Unwatch, it's automatic for terminated actors.
 			break
 		}
 	}
 }
-*/
+
+func (a *RoomManagerActor) handleUpdateRoomPlayerCount(ctx actor.Context, msg *messages.UpdateRoomPlayerCount) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if info, exists := a.roomInfo[msg.RoomID]; exists {
+		info.CurrentPlayers = msg.CurrentPlayers
+		a.roomInfo[msg.RoomID] = info
+		log.Printf("[RoomManagerActor %s] Updated player count for room %s to %d/%d.", ctx.Self().Id, msg.RoomID, info.CurrentPlayers, info.MaxPlayers)
+	} else {
+		log.Printf("[RoomManagerActor %s] Received player count update for unknown room %s.", ctx.Self().Id, msg.RoomID)
+	}
+}
 
 // PropsForRoomManager creates actor.Props for RoomManagerActor.
 func PropsForRoomManager(system *actor.ActorSystem) *actor.Props {

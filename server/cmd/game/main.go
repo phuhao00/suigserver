@@ -37,20 +37,34 @@ func main() {
 	roomManagerPID := actorSystem.Root.SpawnNamed(roomManagerProps, "room-manager")
 	log.Printf("RoomManagerActor spawned with PID: %s", roomManagerPID.String())
 
-	// TODO: Spawn other top-level actors as needed (e.g., WorldManagerActor, PlayerDataManagerActor)
-	// Example:
-	// dbCacheLayer := game.NewDBCacheLayer() // Assuming this is still a service
-	// dbCacheLayer.Start() // Start DB connections
+	// Spawn WorldManagerActor
+	worldManagerProps := internalActor.PropsForWorldManager(actorSystem)
+	worldManagerPID := actorSystem.Root.SpawnNamed(worldManagerProps, "world-manager")
+	log.Printf("WorldManagerActor spawned with PID: %s", worldManagerPID.String())
 
-	// suiService := sui.NewSuiService(cfg.Sui.RPCURL, cfg.Sui.PrivateKey) // Example Sui service
+	// TODO: Spawn other top-level actors as needed (e.g., PlayerDataManagerActor, GameEventManagerActor)
+	// Example for DBCacheLayer (if it were an actor, or if its lifecycle is managed here)
+	// dbConfig := game.DBConfig{Host: "localhost", Port: 5432, User: "user", Password: "password", DBName: "gamedb", SSLMode: "disable"}
+	// redisConfig := game.RedisConfig{Addr: "localhost:6379"}
+	// dbCacheLayer, err := game.NewDBCacheLayer(dbConfig, redisConfig)
+	// if err != nil {
+	// 	log.Fatalf("Failed to initialize DBCacheLayer: %v", err)
+	// }
+	// if err := dbCacheLayer.Start(); err != nil {
+	// 	log.Fatalf("Failed to start DBCacheLayer: %v", err)
+	// }
+	// defer dbCacheLayer.Stop() // Ensure it's stopped on shutdown
+
+	// Example for Sui Client (if used directly by TCPServer or other services not actors)
+	// suiClient := sui.NewClient(cfg.Sui.RPCURL, cfg.Sui.PrivateKey) // Assuming NewClient exists
+	// log.Println("Sui client initialized.")
 
 	// --- Initialize Network Server ---
-	// The TCPServer needs the actor system and the RoomManagerPID to pass to PlayerSessionActors
-	tcpServer := network.NewTCPServer(cfg.Server.TCPPort, actorSystem, roomManagerPID)
+	// TCPServer now also needs WorldManagerPID to pass to PlayerSessionActors
+	tcpServer := network.NewTCPServer(cfg.Server.TCPPort, actorSystem, roomManagerPID, worldManagerPID)
 	if err := tcpServer.Start(); err != nil {
 		log.Fatalf("Failed to start TCP server: %v", err)
 	}
-	// Note: TCPServer now runs its accept loop in a goroutine.
 
 	log.Println("MMO Game Server successfully initialized and running.")
 	log.Println("Press Ctrl+C to shut down.")
@@ -75,10 +89,18 @@ func main() {
 		log.Println("RoomManagerActor stopped.")
 	}
 
-	// TODO: Stop other top-level actors
+	// Stop WorldManagerActor
+	log.Printf("Stopping WorldManagerActor %s...", worldManagerPID.String())
+	if err := actorSystem.Root.StopFuture(worldManagerPID).Wait(); err != nil {
+		log.Printf("Error stopping WorldManagerActor: %v", err)
+	} else {
+		log.Println("WorldManagerActor stopped.")
+	}
+
+	// TODO: Stop other top-level actors (e.g., PlayerDataManagerActor) in appropriate order
 
 	// Shutdown actor system
-	// This will wait for all actors to stop. A timeout can be added.
+	// This will wait for all actors to stop.
 	log.Println("Shutting down actor system...")
 	actorSystem.Shutdown() // Waits for all actors to stop
 	// It's good practice to use actorSystem.ProcessRegistry.AddutdownHook if you need complex shutdown sequences or timeouts.

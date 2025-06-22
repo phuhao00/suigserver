@@ -87,6 +87,14 @@ type RoomChatMessage struct {
 	Timestamp  int64
 }
 
+// UpdateRoomPlayerCount is sent by a RoomActor to its RoomManagerActor
+// to inform it about changes in the player count.
+type UpdateRoomPlayerCount struct {
+	RoomID         string
+	CurrentPlayers int
+	MaxPlayers     int // Optional, can be useful for manager to know if it changed
+}
+
 // PlayerActionInRoom is another example for BroadcastToRoom, representing a game action.
 type PlayerActionInRoom struct {
 	PlayerID   string

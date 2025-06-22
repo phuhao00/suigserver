@@ -1,10 +1,14 @@
 package actor
 
 import (
+package actor
+
+import (
 	"fmt"
 	"log"
 	"net"
 	"strings" // For basic message parsing, will be replaced by proper protocol
+	"time"    // For heartbeat
 
 	"github.com/asynkron/protoactor-go/actor"
 	"github.com/phuhao00/suigserver/server/internal/actor/messages"
@@ -13,117 +17,174 @@ import (
 
 // PlayerSessionActor manages a single client's connection and game session.
 type PlayerSessionActor struct {
-	conn           net.Conn
-	actorSystem    *actor.ActorSystem // To interact with other actors
-	playerID       string             // Set after authentication
-	roomPID        *actor.PID         // PID of the room the player is currently in
-	roomManagerPID *actor.PID         // PID of the RoomManagerActor
+	conn            net.Conn
+	actorSystem     *actor.ActorSystem // To interact with other actors
+	playerID        string             // Set after authentication
+	roomPID         *actor.PID         // PID of the room the player is currently in
+	roomManagerPID  *actor.PID         // PID of the RoomManagerActor
+	worldManagerPID *actor.PID         // PID of the WorldManagerActor, to be injected or discovered
 	// other player-specific state
+
+	lastActivity    time.Time // Time of last message from client or significant activity
+	heartbeatStopCh chan struct{} // Channel to stop heartbeat goroutine (if any server-side ping)
 }
 
 // NewPlayerSessionActor creates a new PlayerSessionActor instance.
-// It's a constructor function used with actor.PropsFromProducer.
-func NewPlayerSessionActor(system *actor.ActorSystem, roomManagerPID *actor.PID) actor.Actor {
+// roomManagerPID and worldManagerPID should be passed in or discovered.
+// For now, worldManagerPID is passed in. A discovery mechanism (e.g. actor registry) is better for complex apps.
+func NewPlayerSessionActor(system *actor.ActorSystem, roomManagerPID *actor.PID, worldManagerPID *actor.PID) actor.Actor {
 	return &PlayerSessionActor{
-		actorSystem:    system,
-		roomManagerPID: roomManagerPID,
+		actorSystem:     system,
+		roomManagerPID:  roomManagerPID,
+		worldManagerPID: worldManagerPID, // Store this for later use
+		heartbeatStopCh: make(chan struct{}),
 	}
 }
+
+const (
+	// clientActivityTimeout is the duration after which a client is disconnected if no messages are received.
+	clientActivityTimeout = 90 * time.Second
+	// authTimeout is the time allowed for a client to authenticate after connecting.
+	authTimeout = 60 * time.Second
+)
 
 // Receive is the main message handling loop for the PlayerSessionActor.
 func (a *PlayerSessionActor) Receive(ctx actor.Context) {
 	switch msg := ctx.Message().(type) {
 	case *actor.Started:
 		log.Printf("[%s] PlayerSessionActor started.", ctx.Self().Id)
+		// An initial timeout for ClientConnected could be set here if TCPServer doesn't guarantee it.
+		// For now, we assume ClientConnected will arrive shortly.
+		// If ClientConnected doesn't arrive, this actor might become a zombie.
+		// Consider a timeout here if ClientConnected is not guaranteed.
 
 	case *actor.Stopping:
-		log.Printf("[%s] PlayerSessionActor stopping.", ctx.Self().Id)
+		log.Printf("[%s] PlayerSessionActor stopping: %s", ctx.Self().Id, a.playerID)
 		if a.conn != nil {
 			a.conn.Close() // Ensure connection is closed when actor stops
 		}
+		a.cleanupResources(ctx) // Cleanup heartbeat resources and notify other systems
 
 	case *actor.Stopped:
-		log.Printf("[%s] PlayerSessionActor stopped.", ctx.Self().Id)
+		log.Printf("[%s] PlayerSessionActor stopped: %s", ctx.Self().Id, a.playerID)
+
+	case *actor.ReceiveTimeout:
+		log.Printf("[%s] ReceiveTimeout for player %s: No client activity or authentication in time. Stopping session.", ctx.Self().Id, a.playerID)
+		if a.conn != nil {
+			// Try to inform client, though connection might already be dead
+			a.handleForwardToClient(&messages.ForwardToClient{Payload: []byte("Timeout due to inactivity or failed authentication. Disconnecting.\n")})
+			a.conn.Close()
+		}
+		ctx.Stop(ctx.Self())
 
 	case *messages.ClientConnected:
 		log.Printf("[%s] Received ClientConnected from %s", ctx.Self().Id, msg.Conn.RemoteAddr())
 		a.conn = msg.Conn
-		// TODO: Implement heartbeat mechanism
-		// TODO: Request authentication, e.g., by sending a message to the client or waiting for auth token
+		a.lastActivity = time.Now()
+		ctx.SetReceiveTimeout(authTimeout) // Client has this much time to send auth command
 
-		// Example: Send a welcome message to the client
-		welcomeMsg := &messages.ForwardToClient{Payload: []byte("Welcome to the MMO Server! Please authenticate.\n")}
-		a.handleForwardToClient(welcomeMsg)
+		// Request authentication
+		authRequestMsg := &messages.ForwardToClient{Payload: []byte("Welcome! Please authenticate using 'auth <player_id> <token>'.\n")}
+		a.handleForwardToClient(authRequestMsg)
 
 	case *messages.ClientMessage:
-		log.Printf("[%s] Received ClientMessage: %s", ctx.Self().Id, string(msg.Payload))
+		log.Printf("[%s] Received ClientMessage from player %s: %s", ctx.Self().Id, a.playerID, string(msg.Payload))
+		a.lastActivity = time.Now() // Update last activity time on any client message
+
+		if !a.isAuthenticated() {
+			// If not authenticated, keep the authTimeout active.
+			// Any message resets it, giving client more time for the 'auth' command.
+			ctx.SetReceiveTimeout(authTimeout)
+		} else {
+			// If authenticated, switch to clientActivityTimeout for general inactivity.
+			ctx.SetReceiveTimeout(clientActivityTimeout)
+		}
 		a.handleClientPayload(ctx, msg.Payload)
 
 	case *messages.ForwardToClient:
 		a.handleForwardToClient(msg)
 
 	case *messages.ClientDisconnected:
-		log.Printf("[%s] Received ClientDisconnected: %s. Cleaning up.", ctx.Self().Id, msg.Reason)
+		log.Printf("[%s] Received ClientDisconnected for player %s: %s. Cleaning up.", ctx.Self().Id, a.playerID, msg.Reason)
 		// If in a room, notify the room actor
 		if a.roomPID != nil {
 			ctx.Send(a.roomPID, &messages.LeaveRoomRequest{PlayerID: a.playerID, PlayerPID: ctx.Self()})
 		}
-		// TODO: Notify other relevant systems (e.g., save player data)
+		// Other cleanup is handled in the *actor.Stopping case, which will be triggered by ctx.Stop(ctx.Self())
 		if a.conn != nil {
 			a.conn.Close() // Ensure conn is closed
 		}
 		ctx.Stop(ctx.Self()) // Stop this actor instance
 
-	case *messages.AuthenticatePlayer: // This message might be sent by this actor to itself after parsing, or from an AuthActor
-		log.Printf("[%s] Authenticating player %s", ctx.Self().Id, msg.PlayerID)
-		// TODO: Actual authentication logic here (e.g., check token against DB/auth service)
-		// For now, assume success
-		a.playerID = msg.PlayerID
+	case *messages.AuthenticatePlayer:
+		log.Printf("[%s] Authenticating player %s with token '%s'", ctx.Self().Id, msg.PlayerID, msg.Token)
+		// Actual authentication logic placeholder
+		// In a real app, this would involve checking against a database or auth service.
+		// The token should be securely handled.
+		success := false
+		expectedToken := "dummy_token" // Example token
+		if msg.Token == expectedToken {
+			a.playerID = msg.PlayerID // Set playerID upon successful authentication
+			success = true
+			a.lastActivity = time.Now()
+			ctx.CancelReceiveTimeout()                   // Authentication successful, cancel auth timeout
+			ctx.SetReceiveTimeout(clientActivityTimeout) // Start general client activity timeout
+			log.Printf("[%s] Player %s authenticated successfully.", ctx.Self().Id, a.playerID)
+
+			// Notify WorldManager that player has entered
+			// The WorldManagerPID should be available to the PlayerSessionActor,
+			// e.g., passed during creation or retrieved from a well-known actor registry.
+			if a.worldManagerPID != nil {
+				log.Printf("[%s] Notifying WorldManager that player %s has entered.", ctx.Self().Id, a.playerID)
+				ctx.Send(a.worldManagerPID, &messages.PlayerEnteredWorld{PlayerID: a.playerID, PlayerPID: ctx.Self()})
+			} else {
+				log.Printf("[%s] WorldManagerPID not set for player %s. Cannot notify about entering world.", ctx.Self().Id, a.playerID)
+			}
+
+		} else {
+			log.Printf("[%s] Player %s authentication failed (invalid token).", ctx.Self().Id, msg.PlayerID)
+			authFailMsg := &messages.ForwardToClient{Payload: []byte("Authentication failed. Invalid credentials.\n")}
+			a.handleForwardToClient(authFailMsg)
+			// Keep auth timeout active for another attempt, or disconnect after N failed attempts (not implemented here).
+			ctx.SetReceiveTimeout(authTimeout)
+		}
+
 		authResponse := &messages.PlayerAuthenticated{
 			PlayerID: msg.PlayerID,
-			Success:  true,
-			// PlayerActorPID: pidForPlayerData, // If there's a separate actor for persistent player data
+			Success:  success,
 		}
-		// This message could be sent to itself to update state or to the original requester (if any)
-		ctx.Respond(authResponse) // If using Request/Response pattern
-		log.Printf("[%s] Player %s authenticated.", ctx.Self().Id, a.playerID)
+		// Respond to original requester if it was a Request, or just update state.
+		// If 'auth' command was parsed and sent to self, ctx.Respond works.
+		if ctx.Sender() != nil {
+			ctx.Respond(authResponse)
+		}
 
-		// Example: After auth, maybe try to join a default room or send to lobby actor
-		// if a.roomManagerPID != nil {
-		//    ctx.Request(a.roomManagerPID, &messages.FindRoomRequest{PlayerPID: ctx.Self(), Criteria: "default_lobby"})
-		// }
 
 	case *messages.FindRoomResponse: // Response from RoomManagerActor
-		log.Printf("[%s] Received FindRoomResponse: Found=%t, RoomID=%s, RoomPID=%s, Error=%s",
-			ctx.Self().Id, msg.Found, msg.RoomID, msg.RoomPID, msg.Error)
+		log.Printf("[%s] Player %s received FindRoomResponse: Found=%t, RoomID=%s, RoomPID=%s, Error=%s",
+			ctx.Self().Id, a.playerID, msg.Found, msg.RoomID, msg.RoomPID, msg.Error)
 		if msg.Found && msg.RoomPID != nil {
-			// Room found, now send a JoinRoomRequest to the RoomActor
 			joinReq := &messages.JoinRoomRequest{
 				PlayerID:  a.playerID,
 				PlayerPID: ctx.Self(),
 			}
 			ctx.Request(msg.RoomPID, joinReq) // Request to join the actual room
-			// The response to this (JoinRoomResponse) will be handled by the next case.
 		} else {
-			// Room not found or error occurred
 			errMsg := fmt.Sprintf("Error finding room: %s\n", msg.Error)
 			if !msg.Found {
-				errMsg = fmt.Sprintf("Room not found: %s\n", msg.Error) // Or based on criteria in original request
+				errMsg = fmt.Sprintf("Room not found for criteria.\n") // msg.Error might contain more details
 			}
 			a.handleForwardToClient(&messages.ForwardToClient{Payload: []byte(errMsg)})
 		}
 
 	case *messages.JoinRoomResponse: // Response from a RoomActor
 		if msg.Success {
-			// Assuming the sender of JoinRoomResponse is the RoomActor itself.
-			a.roomPID = ctx.Sender()
+			a.roomPID = ctx.Sender() // Assume sender is the RoomActor
 			log.Printf("[%s] Player %s successfully joined room %s (RoomActor PID: %s)", ctx.Self().Id, a.playerID, msg.RoomID, a.roomPID.Id)
-			// Notify client they joined the room
 			joinNotification := &messages.ForwardToClient{Payload: []byte("Successfully joined room: " + msg.RoomID + "\n")}
 			a.handleForwardToClient(joinNotification)
 		} else {
 			log.Printf("[%s] Player %s failed to join room %s: %s", ctx.Self().Id, a.playerID, msg.RoomID, msg.Error)
-			// Notify client about failure
 			failNotification := &messages.ForwardToClient{Payload: []byte("Failed to join room " + msg.RoomID + ": " + msg.Error + "\n")}
 			a.handleForwardToClient(failNotification)
 		}
@@ -132,57 +193,81 @@ func (a *PlayerSessionActor) Receive(ctx actor.Context) {
 		chatPayload := []byte("[" + msg.SenderName + "]: " + msg.Message + "\n")
 		a.handleForwardToClient(&messages.ForwardToClient{Payload: chatPayload})
 
+	// Example: If client sends specific PING messages for keep-alive
+	// case *messages.Ping:
+	// 	log.Printf("[%s] Received Ping from client %s.", ctx.Self().Id, a.playerID)
+	// 	a.lastActivity = time.Now()
+	// 	ctx.SetReceiveTimeout(clientActivityTimeout) // Reset timeout
+	// 	// Optionally send a Pong back
+	// 	// pongMsg := &messages.ForwardToClient{Payload: []byte("PONG\n")}
+	// 	// a.handleForwardToClient(pongMsg)
+
 	default:
-		log.Printf("[%s] PlayerSessionActor received unknown message: %+v", ctx.Self().Id, msg)
+		log.Printf("[%s] PlayerSessionActor %s received unknown message: %T %+v", ctx.Self().Id, a.playerID, msg, msg)
+	}
+}
+
+// cleanupResources performs necessary cleanup when the actor is stopping.
+// This includes stopping any heartbeat timers and notifying other systems.
+func (a *PlayerSessionActor) cleanupResources(ctx actor.Context) {
+	log.Printf("[%s] Cleaning up resources for player %s.", ctx.Self().Id, a.playerID)
+	ctx.CancelReceiveTimeout() // Cancel any pending receive timeout
+
+	// If a server-side ping mechanism (e.g., using time.Ticker) was implemented, it would be stopped here.
+	// close(a.heartbeatStopCh) // Signal any dedicated goroutine to stop
+
+	// Notify other relevant systems if player was authenticated
+	if a.playerID != "" {
+		// Notify WorldManagerActor that player has left
+		// This is important for tracking players in the game world.
+		if a.worldManagerPID != nil {
+			log.Printf("[%s] Notifying WorldManager that player %s has left.", ctx.Self().Id, a.playerID)
+			ctx.Send(a.worldManagerPID, &messages.PlayerLeftWorld{PlayerID: a.playerID, PlayerPID: ctx.Self()})
+		} else {
+			log.Printf("[%s] WorldManagerPID not set for player %s. Cannot notify WorldManager about leaving.", ctx.Self().Id, a.playerID)
+		}
+
+		// Placeholder for saving player data
+		// This would typically involve sending a message to a PlayerDataManagerActor or a similar service.
+		log.Printf("[%s] Player %s disconnected. Placeholder: Trigger save player data mechanism.", ctx.Self().Id, a.playerID)
 	}
 }
 
 // handleClientPayload parses the raw payload from the client and decides what to do.
+// RoomManagerPID is injected. RoomActor PIDs are obtained via RoomManagerActor.
+// WorldManagerPID is also injected (or could be discovered via a registry).
 func (a *PlayerSessionActor) handleClientPayload(ctx actor.Context, payload []byte) {
-	// This is where a proper command/protocol parser would go.
-	// For now, simple string matching.
 	command := strings.TrimSpace(string(payload))
 	parts := strings.Fields(command)
 	if len(parts) == 0 {
 		return
 	}
 
-	log.Printf("[%s] Parsed command: %s, Parts: %v", ctx.Self().Id, parts[0], parts)
+	log.Printf("[%s] Player %s parsed command: %s, Parts: %v", ctx.Self().Id, a.playerID, parts[0], parts)
 
 	switch strings.ToLower(parts[0]) {
 	case "auth": // Example: "auth <player_id> <token>"
-		if len(parts) >= 2 { // Simplified: using player_id as token for now
-			// In a real system, this would go to an AuthenticationActor or service
-			// For now, handle directly for simplicity
+		if len(parts) >= 3 { // Expecting "auth <player_id> <token>"
+			// Token might contain spaces if not handled carefully by client; joining parts[2:] is safer.
+			token := strings.Join(parts[2:], " ")
 			authMsg := &messages.AuthenticatePlayer{
 				PlayerID: parts[1],
-				Token:    "dummy_token", // parts[2] if token exists
+				Token:    token,
 			}
-			// Send to self to process authentication flow
-			ctx.Send(ctx.Self(), authMsg)
+			// Send to self to process authentication flow.
+			// Using RequestSelf ensures that the Sender field is set for ctx.Respond.
+			ctx.Request(ctx.Self(), authMsg)
 		} else {
-			a.handleForwardToClient(&messages.ForwardToClient{Payload: []byte("Usage: auth <player_id>\n")})
+			a.handleForwardToClient(&messages.ForwardToClient{Payload: []byte("Usage: auth <player_id> <token>\n")})
 		}
-	case "join": // Example: "join <room_id>"
+	case "join": // Example: "join <room_criteria_or_id>"
 		if !a.isAuthenticated() {
-			a.handleForwardToClient(&messages.ForwardToClient{Payload: []byte("Error: Not authenticated. Use 'auth <player_id>'.\n")})
+			a.handleForwardToClient(&messages.ForwardToClient{Payload: []byte("Error: Not authenticated. Use 'auth <player_id> <token>'.\n")})
 			return
 		}
-		if len(parts) == 2 {
-			roomID := parts[1]
-			// TODO: Need a way to get RoomManagerActor PID or specific RoomActor PID
-			// For now, assume we have a known RoomManager PID or a way to discover Room PIDs.
-			// This is a placeholder for actual room discovery/management.
-			log.Printf("[%s] Player %s attempting to join room %s", ctx.Self().Id, a.playerID, roomID)
-
-			// --- Placeholder for Room Discovery/Creation ---
-			// In a real system, you'd ask a RoomManagerActor or use a discovery mechanism.
-			// For this example, let's assume a RoomActor with a predictable name/ID might exist
-			// or we try to spawn one directly if we knew its fixed name (not typical for dynamic rooms).
-
-			// Example: Directly find or spawn a known room actor (for testing purposes)
-			// This is NOT a scalable approach for dynamic rooms.
-			log.Printf("[%s] Player %s attempting to join room %s", ctx.Self().Id, a.playerID, roomID)
+		if len(parts) >= 2 {
+			criteria := strings.Join(parts[1:], " ") // Room criteria can be multi-word
+			log.Printf("[%s] Player %s attempting to find and join room with criteria: '%s'", ctx.Self().Id, a.playerID, criteria)
 
 			if a.roomManagerPID == nil {
 				log.Printf("[%s] RoomManagerPID not configured for PlayerSessionActor. Cannot join room.", ctx.Self().Id)
@@ -191,16 +276,15 @@ func (a *PlayerSessionActor) handleClientPayload(ctx actor.Context, payload []by
 			}
 
 			// Send FindRoomRequest to RoomManagerActor
-			// The criteria could be more complex, here we use roomID as the criteria.
 			ctx.Request(a.roomManagerPID, &messages.FindRoomRequest{
-				Criteria:  roomID, // Player is requesting a specific room ID
+				Criteria:  criteria,
 				PlayerPID: ctx.Self(),
 			})
-			// The response (FindRoomResponse) will be handled in this actor's Receive method.
-			a.handleForwardToClient(&messages.ForwardToClient{Payload: []byte(fmt.Sprintf("Attempting to find and join room '%s'...\n", roomID))})
+			// Response (FindRoomResponse) will be handled in Receive()
+			a.handleForwardToClient(&messages.ForwardToClient{Payload: []byte(fmt.Sprintf("Attempting to find and join room '%s'...\n", criteria))})
 
 		} else {
-			a.handleForwardToClient(&messages.ForwardToClient{Payload: []byte("Usage: join <room_id>\n")})
+			a.handleForwardToClient(&messages.ForwardToClient{Payload: []byte("Usage: join <room_criteria_or_id>\n")})
 		}
 	case "say": // Example: "say <message>"
 		if !a.isAuthenticated() {
@@ -215,17 +299,22 @@ func (a *PlayerSessionActor) handleClientPayload(ctx actor.Context, payload []by
 			chatMessage := strings.Join(parts[1:], " ")
 			roomChatMessage := &messages.RoomChatMessage{
 				SenderID:   a.playerID,
-				SenderName: a.playerID, // Could be a character name
+				SenderName: a.playerID, // Could be a character name or display name
 				Message:    chatMessage,
 			}
 			// Send to RoomActor for broadcasting
 			ctx.Send(a.roomPID, &messages.BroadcastToRoom{
-				SenderPID:     ctx.Self(),
+				SenderPID:     ctx.Self(), // So room can identify sender if needed (e.g. not broadcast back)
 				ActualMessage: roomChatMessage,
 			})
 		} else {
 			a.handleForwardToClient(&messages.ForwardToClient{Payload: []byte("Usage: say <message>\n")})
 		}
+	case "ping": // Client-initiated ping for keep-alive
+		// The reception of any message, including "ping", updates `a.lastActivity`
+		// and resets `clientActivityTimeout` in the Receive method's ClientMessage case.
+		log.Printf("[%s] Received 'ping' from client %s.", ctx.Self().Id, a.playerID)
+		a.handleForwardToClient(&messages.ForwardToClient{Payload: []byte("PONG\n")}) // Send PONG back as acknowledgement
 
 	default:
 		errMsg := "Unknown command: " + parts[0] + "\n"
@@ -236,14 +325,14 @@ func (a *PlayerSessionActor) handleClientPayload(ctx actor.Context, payload []by
 // handleForwardToClient sends a message payload to the connected client.
 func (a *PlayerSessionActor) handleForwardToClient(msg *messages.ForwardToClient) {
 	if a.conn == nil {
-		log.Printf("PlayerSessionActor: No connection available to forward message.")
+		log.Printf("[%s] PlayerSessionActor %s: No connection available to forward message.", ctx.Self().Id, a.playerID)
 		return
 	}
 	if _, err := a.conn.Write(msg.Payload); err != nil {
-		log.Printf("PlayerSessionActor: Error writing to client %s: %v", a.conn.RemoteAddr(), err)
-		// If write fails, connection might be dead. Consider stopping the actor.
-		// This could also be where a ClientDisconnected message is generated and sent to self.
-		// For now, just log. The read loop in TCPServer should detect EOF/errors eventually.
+		log.Printf("[%s] PlayerSessionActor %s: Error writing to client %s: %v", ctx.Self().Id, a.playerID, a.conn.RemoteAddr(), err)
+		// If write fails, connection might be dead.
+		// Consider sending ClientDisconnected to self to trigger cleanup.
+		// For now, just log. The read loop in TCPServer or ReceiveTimeout should eventually handle it.
 	}
 }
 
@@ -253,6 +342,7 @@ func (a *PlayerSessionActor) isAuthenticated() bool {
 
 // Props creates actor.Props for PlayerSessionActor.
 // This is how other actors or the system will spawn PlayerSessionActors.
-func Props(actorSystem *actor.ActorSystem, roomManagerPID *actor.PID) *actor.Props {
-	return actor.PropsFromProducer(func() actor.Actor { return NewPlayerSessionActor(actorSystem, roomManagerPID) })
+// It now requires actorSystem, roomManagerPID, and worldManagerPID.
+func Props(actorSystem *actor.ActorSystem, roomManagerPID *actor.PID, worldManagerPID *actor.PID) *actor.Props {
+	return actor.PropsFromProducer(func() actor.Actor { return NewPlayerSessionActor(actorSystem, roomManagerPID, worldManagerPID) })
 }

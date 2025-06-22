@@ -9,29 +9,48 @@ import (
 	"sync"
 	"time"
 
+	"encoding/binary"
 	"github.com/asynkron/protoactor-go/actor"
 	sessionactor "github.com/phuhao00/suigserver/server/internal/actor" // Alias for the actor package
 	"github.com/phuhao00/suigserver/server/internal/actor/messages"
 )
 
+const (
+	// MaxMessageSize defines the maximum allowed size for a single message payload.
+	// This helps prevent DoS attacks with overly large messages. E.g., 1MB.
+	MaxMessageSize = 1 * 1024 * 1024
+	// LengthPrefixSize is the size in bytes of the message length prefix.
+	// Using uint32 for length, so 4 bytes.
+	LengthPrefixSize = 4
+)
+
 // TCPServer manages TCP client connections and interfaces with the actor system.
 type TCPServer struct {
-	listener       net.Listener
-	port           int
-	actorSystem    *actor.ActorSystem
-	wg             sync.WaitGroup
-	shutdown       chan struct{}
-	roomManagerPID *actor.PID // PID of the RoomManagerActor
+	listener        net.Listener
+	port            int
+	actorSystem     *actor.ActorSystem
+	wg              sync.WaitGroup
+	shutdown        chan struct{}
+	roomManagerPID  *actor.PID // PID of the RoomManagerActor
+	worldManagerPID *actor.PID // PID of the WorldManagerActor, to be passed to SessionActor
 }
 
 // NewTCPServer creates a new TCPServer.
-func NewTCPServer(port int, system *actor.ActorSystem, roomManagerPID *actor.PID) *TCPServer {
+// It now requires worldManagerPID.
+func NewTCPServer(port int, system *actor.ActorSystem, roomManagerPID *actor.PID, worldManagerPID *actor.PID) *TCPServer {
 	log.Printf("Initializing TCP Server for port %d...\n", port)
+	if roomManagerPID == nil {
+		log.Panicf("TCPServer: RoomManagerPID cannot be nil")
+	}
+	if worldManagerPID == nil {
+		log.Panicf("TCPServer: WorldManagerPID cannot be nil")
+	}
 	return &TCPServer{
-		port:           port,
-		actorSystem:    system,
-		shutdown:       make(chan struct{}),
-		roomManagerPID: roomManagerPID,
+		port:            port,
+		actorSystem:     system,
+		shutdown:        make(chan struct{}),
+		roomManagerPID:  roomManagerPID,
+		worldManagerPID: worldManagerPID,
 	}
 }
 
@@ -93,11 +112,18 @@ func (s *TCPServer) handleConnection(conn net.Conn) {
 	// The above line is incorrect as actors should not be passed `conn` directly in constructor usually,
 	// but rather receive it via a message after starting.
 	if s.roomManagerPID == nil {
-		log.Printf("[%s] CRITICAL: RoomManagerPID is not set in TCPServer. Cannot spawn PlayerSessionActor correctly.", conn.RemoteAddr())
-		conn.Close() // Close connection as we can't proceed
+		log.Panicf("[%s] CRITICAL: RoomManagerPID is not set in TCPServer. Cannot spawn PlayerSessionActor correctly.", conn.RemoteAddr())
+		// conn.Close() - Panicking, so this won't be reached.
 		return
 	}
-	playerSessionProps := sessionactor.Props(s.actorSystem, s.roomManagerPID) // Pass RoomManagerPID
+	if s.worldManagerPID == nil {
+		log.Panicf("[%s] CRITICAL: WorldManagerPID is not set in TCPServer. Cannot spawn PlayerSessionActor correctly.", conn.RemoteAddr())
+		// conn.Close() - Panicking, so this won't be reached.
+		return
+	}
+
+	// PlayerSessionActor now requires worldManagerPID as well.
+	playerSessionProps := sessionactor.Props(s.actorSystem, s.roomManagerPID, s.worldManagerPID)
 	playerSessionPID := s.actorSystem.Root.Spawn(playerSessionProps)
 	log.Printf("[%s] Spawned PlayerSessionActor with PID: %s", conn.RemoteAddr(), playerSessionPID.String())
 
@@ -110,63 +136,57 @@ func (s *TCPServer) handleConnection(conn net.Conn) {
 	s.actorSystem.Root.Send(playerSessionPID, connectedMsg)
 
 	// Goroutine for reading from the client and forwarding messages to PlayerSessionActor
-	reader := bufio.NewReader(conn)
+	// reader := bufio.NewReader(conn) // Replaced by direct read for length-prefixing
 	for {
-		// TODO: Implement proper message framing (e.g., length-prefixing + payload)
-		// For now, using newline-delimited messages as a simple placeholder.
-		// Consider a timeout for reading to prevent dead connections from holding resources.
-		// conn.SetReadDeadline(time.Now().Add(60 * time.Second)) // Example read deadline
-
-		line, err := reader.ReadBytes('\n') // Reads until \n, includes \n in 'line'
+		// Implement proper message framing: Length-Prefixing
+		// 1. Read the length prefix (e.g., 4 bytes for uint32)
+		lenBuf := make([]byte, LengthPrefixSize)
+		_, err := io.ReadFull(conn, lenBuf)
 		if err != nil {
-			if err == io.EOF {
-				log.Printf("[%s] Connection closed by client (EOF).\n", conn.RemoteAddr())
-			} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
-				log.Printf("[%s] Connection timeout.\n", conn.RemoteAddr())
-			} else {
-				log.Printf("[%s] Error reading from connection: %v\n", conn.RemoteAddr(), err)
-			}
-			// Notify PlayerSessionActor about disconnection
-			if playerSessionPID != nil {
-				s.actorSystem.Root.Send(playerSessionPID, &messages.ClientDisconnected{Reason: err.Error()})
-				// Optionally wait for PlayerSessionActor to confirm cleanup before closing conn,
-				// or just stop it.
-				// s.actorSystem.Root.Stop(playerSessionPID) // Stop the actor
-			}
-			conn.Close() // Ensure connection is closed
-			return       // Exit handleConnection goroutine
+			s.handleReadError(conn, playerSessionPID, err, "reading length prefix")
+			return
 		}
 
-		// Trim newline character(s)
-		trimmedLine := trimNewlineCharsBytes(line)
-		log.Printf("[%s] Received raw: '%s'\n", conn.RemoteAddr(), string(trimmedLine))
+		messageLength := binary.BigEndian.Uint32(lenBuf)
+
+		// 2. Validate message length
+		if messageLength == 0 {
+			log.Printf("[%s] Received message with zero length. Ignoring.", conn.RemoteAddr())
+			continue // Or treat as an error/disconnect
+		}
+		if messageLength > MaxMessageSize {
+			log.Printf("[%s] Message length %d exceeds MaxMessageSize %d. Closing connection.",
+				conn.RemoteAddr(), messageLength, MaxMessageSize)
+			s.actorSystem.Root.Send(playerSessionPID, &messages.ClientDisconnected{Reason: "Message too large"})
+			conn.Close()
+			return
+		}
+
+		// 3. Read the message payload
+		payloadBuf := make([]byte, messageLength)
+		_, err = io.ReadFull(conn, payloadBuf)
+		if err != nil {
+			s.handleReadError(conn, playerSessionPID, err, "reading payload")
+			return
+		}
+
+		log.Printf("[%s] Received %d bytes. Payload: '%s'\n", conn.RemoteAddr(), messageLength, string(payloadBuf))
 
 		if playerSessionPID != nil {
-			s.actorSystem.Root.Send(playerSessionPID, &messages.ClientMessage{Payload: trimmedLine})
+			// The payloadBuf is what PlayerSessionActor expects (e.g., JSON string)
+			s.actorSystem.Root.Send(playerSessionPID, &messages.ClientMessage{Payload: payloadBuf})
 		} else {
-			// Fallback echo if no actor system linkage (for very basic testing)
-			log.Printf("[%s] Warning: No PlayerSessionPID, echoing back.\n", conn.RemoteAddr())
-			if _, writeErr := conn.Write(append([]byte("Echo: "), trimmedLine...)); writeErr != nil {
-				log.Printf("[%s] Error writing echo: %v", conn.RemoteAddr(), writeErr)
-				// No need to notify PlayerSessionActor here as it's not involved.
-				conn.Close()
-				return
-			}
-			if _, writeErr := conn.Write([]byte("\n")); writeErr != nil { // Add newline back for client
-				log.Printf("[%s] Error writing newline for echo: %v", conn.RemoteAddr(), writeErr)
-				conn.Close()
-				return
-			}
+			// This case should ideally not be reached if PIDs are managed correctly
+			log.Printf("[%s] Warning: No PlayerSessionPID. Cannot process message.", conn.RemoteAddr())
+			// Not echoing back anymore as the protocol is more defined.
 		}
 
 		// Check for server shutdown signal
 		select {
 		case <-s.shutdown:
 			log.Printf("[%s] Server shutting down, closing connection handler.", conn.RemoteAddr())
-			// Notify PlayerSessionActor about server shutdown initiated disconnection
 			if playerSessionPID != nil {
 				s.actorSystem.Root.Send(playerSessionPID, &messages.ClientDisconnected{Reason: "Server shutdown"})
-				// s.actorSystem.Root.Stop(playerSessionPID) // Stop the actor
 			}
 			conn.Close()
 			return
@@ -174,6 +194,25 @@ func (s *TCPServer) handleConnection(conn net.Conn) {
 			// continue reading
 		}
 	}
+}
+
+func (s *TCPServer) handleReadError(conn net.Conn, sessionPID *actor.PID, err error, context string) {
+	errMsg := ""
+	if err == io.EOF {
+		log.Printf("[%s] Connection closed by client (EOF) while %s.\n", conn.RemoteAddr(), context)
+		errMsg = "EOF"
+	} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		log.Printf("[%s] Connection timeout while %s.\n", conn.RemoteAddr(), context)
+		errMsg = "Timeout"
+	} else {
+		log.Printf("[%s] Error reading from connection while %s: %v\n", conn.RemoteAddr(), context, err)
+		errMsg = err.Error()
+	}
+
+	if sessionPID != nil {
+		s.actorSystem.Root.Send(sessionPID, &messages.ClientDisconnected{Reason: errMsg})
+	}
+	conn.Close() // Ensure connection is closed
 }
 
 // Stop gracefully shuts down the TCP server.
@@ -208,7 +247,7 @@ func (s *TCPServer) Stop() {
 	log.Println("TCP Server stopped successfully.")
 }
 
-// trimNewlineCharsBytes removes trailing \n and \r from a byte slice.
+// trimNewlineCharsBytes is no longer needed with length-prefixing, but kept for reference if other parts use it.
 func trimNewlineCharsBytes(b []byte) []byte {
 	if len(b) > 0 && b[len(b)-1] == '\n' {
 		b = b[:len(b)-1]
@@ -219,13 +258,11 @@ func trimNewlineCharsBytes(b []byte) []byte {
 	return b
 }
 
-// Note: The PlayerSessionActor (to be created in `server/internal/actor/session_actor.go`)
-// will be responsible for:
-// 1. Receiving `ClientConnected` and `ClientMessage`.
-// 2. Parsing `ClientMessage.Payload` into game-specific commands/messages.
-// 3. Interacting with other actors (RoomActor, WorldActor, etc.).
-// 4. Sending `messages.ForwardToClient` back to a mechanism that can write to `net.Conn`.
-//    This could be done by the PlayerSessionActor holding `net.Conn` and writing directly,
-//    or by sending a message to a dedicated "ConnectionWriterActor" if more complex write management is needed.
-//    For simplicity, PlayerSessionActor might write directly.
+// Note: The PlayerSessionActor (server/internal/actor/session_actor.go)
+// is responsible for:
+// 1. Receiving `ClientConnected` (with net.Conn) and `ClientMessage` (with raw payload []byte).
+// 2. Parsing `ClientMessage.Payload` (e.g., from JSON []byte) into game-specific commands/messages.
+// 3. Interacting with other actors (RoomActor, WorldManagerActor, etc.).
+// 4. Sending `messages.ForwardToClient` (which contains payload []byte for the client).
+//    The PlayerSessionActor needs to prepend the length prefix before writing to net.Conn.
 // 5. Handling `ClientDisconnected` for cleanup.
