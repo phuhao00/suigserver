@@ -5,26 +5,24 @@ import (
 	"log"
 	"strconv"
 
-	"github.com/tidwall/gjson"
+	"github.com/block-vision/sui-go-sdk/models"
 )
 
 // EconomySuiService interacts with the Economic System contracts on the Sui blockchain.
 type EconomySuiService struct {
-	suiClient     *Client
-	packageID     string // ID of the package containing the economy/token module
-	moduleName    string // Name of the Move module, e.g., "game_coin"
-	senderAddress string // Address of the account sending transactions (e.g., a treasury or admin account for some ops)
-	gasObjectID   string // Object ID of the gas coin for transactions
+	suiClient     *SuiClient // Use the refactored SuiClient
+	packageID     string     // ID of the package containing the economy/token module
+	moduleName    string     // Name of the Move module, e.g., "game_coin"
+	senderAddress string     // Address of the account sending transactions (e.g., a treasury or admin account for some ops)
+	gasObjectID   string     // Object ID of the gas coin for transactions
 }
 
 // NewEconomySuiService creates a new EconomySuiService.
-func NewEconomySuiService(client *Client, packageID, moduleName, senderAddress, gasObjectID string) *EconomySuiService {
+func NewEconomySuiService(client *SuiClient, packageID, moduleName, senderAddress, gasObjectID string) *EconomySuiService {
 	log.Println("Initializing Economy Sui Service...")
 	if client == nil {
 		log.Panic("EconomySuiService: Sui client cannot be nil")
 	}
-	// Some parameters might be optional depending on methods used.
-	// For now, assume packageID and moduleName are core for interacting with a specific game token.
 	if packageID == "" || moduleName == "" {
 		log.Panic("EconomySuiService: packageID and moduleName must be provided.")
 	}
@@ -32,31 +30,24 @@ func NewEconomySuiService(client *Client, packageID, moduleName, senderAddress, 
 		suiClient:     client,
 		packageID:     packageID,
 		moduleName:    moduleName,
-		senderAddress: senderAddress, // May not be needed for all read-only calls
-		gasObjectID:   gasObjectID,   // May not be needed for all read-only calls
+		senderAddress: senderAddress,
+		gasObjectID:   gasObjectID,
 	}
 }
 
 // GetPlayerBalance retrieves a player's balance for a specific on-chain coin type.
-// coinType is the fully qualified type string, e.g., "0x2::sui::SUI" or "0xYOUR_PACKAGE_ID::YOUR_MODULE::YOUR_COIN_TYPE"
 func (s *EconomySuiService) GetPlayerBalance(playerAddress string, coinType string) (uint64, error) {
 	log.Printf("Fetching balance for player %s, CoinType: %s", playerAddress, coinType)
 
-	// TODO: Implement actual Sui call. This uses `suix_getBalance`.
-	// The `s.suiClient.GetBalance` method already exists in client.go.
-	result, err := s.suiClient.GetBalance(playerAddress, coinType)
+	resp, err := s.suiClient.GetBalance(playerAddress, coinType)
 	if err != nil {
 		log.Printf("Error fetching balance for %s (CoinType: %s): %v", playerAddress, coinType, err)
 		return 0, err
 	}
 
-	// Example structure of suix_getBalance response:
-	// { "coinType": "0x2::sui::SUI", "coinObjectCount": 1, "totalBalance": "1000000000",
-	//   "lockedBalance": { "epochId": "0", "number": "0" } }
-	totalBalanceStr := result.Get("totalBalance").String()
-	balance, err := strconv.ParseUint(totalBalanceStr, 10, 64)
+	balance, err := strconv.ParseUint(resp.TotalBalance, 10, 64)
 	if err != nil {
-		log.Printf("Error parsing balance string '%s' for %s: %v", totalBalanceStr, playerAddress, err)
+		log.Printf("Error parsing balance string '%s' for %s: %v", resp.TotalBalance, playerAddress, err)
 		return 0, fmt.Errorf("could not parse balance from Sui response: %w", err)
 	}
 
@@ -64,72 +55,66 @@ func (s *EconomySuiService) GetPlayerBalance(playerAddress string, coinType stri
 	return balance, nil
 }
 
-// TransferTokens prepares a transaction to transfer on-chain tokens (Coins) from sender to recipient.
-// coinObjectIDs are the specific coin objects owned by `fromAddress` to be used for payment.
-// This requires the `fromAddress` to be the `senderAddress` used in `CallMoveFunction` or for the tx to be signed by `fromAddress`.
+// TransferTokens prepares a transaction to transfer on-chain tokens (Coins).
+// This function now returns TransactionBlockResponse, which contains the txBytes.
+// The caller is responsible for signing and executing the transaction.
+// Note: The sui-go-sdk's PaySui/PayAllSui methods are more idiomatic for SUI transfers.
+// For custom game tokens, a MoveCall to a specific transfer function in your contract is common.
+// This example assumes a generic "transfer_coins" function in your module.
 func (s *EconomySuiService) TransferTokens(
-	fromAddress string, // Sender of the tokens (must sign the transaction)
-	coinObjectIDs []string, // Specific coin objects to be spent. Their total value must cover 'amount'.
+	fromAddress string,     // Sender of the tokens (must sign the transaction)
+	coinObjectIDs []string, // Specific coin objects to be spent.
 	amount uint64,
 	toAddress string,
-	coinType string, // Fully qualified type of the coin, e.g., "0xPACKAGE::MODULE::COIN_TYPE"
+	coinType string, // Fully qualified type of the coin
 	gasBudget uint64,
-) (gjson.Result, error) {
-	functionName := "transfer_coins" // Placeholder: This usually involves PTB with `SplitCoins` and `TransferObjects`
-	log.Printf("Preparing to transfer %d of %s from %s to %s. Coins: %v", amount, coinType, fromAddress, toAddress, coinObjectIDs)
+) (models.TransactionBlockResponse, error) {
+	// This function name should match a function in your Move contract.
+	// For SUI, it's better to use PTB commands like SplitCoins and TransferObjects.
+	// For a custom Coin<T>, you might have a `transfer(coin: Coin<T>, amount: u64, recipient: address)`
+	// or `split_and_transfer(coins: vector<Coin<T>>, amount: u64, recipient: address)`
+	// The example below assumes a function that takes coin object IDs.
+	functionName := "transfer_game_coin" // Replace with your actual contract function
+	log.Printf("Preparing to transfer %d of %s from %s to %s using coins %v.", amount, coinType, fromAddress, toAddress, coinObjectIDs)
 
-	// TODO: This is a simplified placeholder. Actual coin transfer involves:
-	// 1. Identifying one or more Coin<T> objects owned by `fromAddress` that sum up to at least `amount`.
-	// 2. If a single coin object has > amount, it needs to be split. If multiple coin objects are needed, they are merged/used.
-	// 3. The resulting Coin<T> of `amount` is then transferred to `toAddress`.
-	// This is typically done using a Programmable Transaction Block (PTB).
-	// `unsafe_moveCall` is not ideal for direct coin transfers.
-	// A helper function in the Move contract `moduleName` might facilitate this, e.g., a `transfer` function.
-	// Or, the server constructs a PTB and uses `sui_executeTransactionBlock`.
-
-	// Placeholder using a hypothetical Move function `transfer_game_coin`
-	// This assumes your `s.moduleName` has such a function.
-	// module: s.moduleName, function: "transfer_game_coin"
-	// args: [recipient_address_str, amount_u64, coin_object_id_to_spend_from_str]
-	// This is highly dependent on your contract design.
 	if len(coinObjectIDs) == 0 {
-		return gjson.Result{}, fmt.Errorf("at least one coinObjectID must be provided for transfer")
+		return models.TransactionBlockResponse{}, fmt.Errorf("at least one coinObjectID must be provided for transfer")
 	}
 
+	// Arguments depend heavily on the Move function's signature.
+	// Example: if your function takes a vector of coin IDs, amount, and recipient:
 	callArgs := []interface{}{
-		toAddress,                    // recipient
+		coinObjectIDs,                  // E.g., a vector of object IDs for the coins to use
 		strconv.FormatUint(amount, 10), // amount
-		coinObjectIDs,                // This might be a single coin or a vector of coins depending on contract
+		toAddress,                      // recipient
 	}
-	typeArgs := []string{coinType} // The type of coin being transferred, if function is generic over T for Coin<T>
+	// If your function is generic over the coin type T (e.g., transfer<T>(...))
+	typeArgs := []string{coinType}
 
-	// The `fromAddress` must be the signer of the transaction.
-	// The `s.senderAddress` configured for EconomySuiService might be different (e.g., a service account).
-	// For player-to-player transfers, the transaction must be signed by `fromAddress`.
-	// The `gasObjectID` should also belong to `fromAddress`.
-	txResult, err := s.suiClient.CallMoveFunction(
-		fromAddress, // Actual sender of tokens
-		s.packageID, // Package of the coin/transfer logic
-		s.moduleName,
-		functionName, // This hypothetical function needs to exist
-		typeArgs,
-		callArgs,
+	// The `fromAddress` must be the signer. `s.gasObjectID` should be owned by `fromAddress`.
+	txBlockResponse, err := s.suiClient.MoveCall(
+		fromAddress,   // Signer and owner of coins/gas
+		s.packageID,   // Package of the coin/transfer logic
+		s.moduleName,  // Module containing the transfer function
+		functionName,  // The actual function in your Move contract
+		typeArgs,      // Type arguments, if any
+		callArgs,      // Arguments for the Move function
 		s.gasObjectID, // Gas object owned by `fromAddress`
 		gasBudget,
 	)
 
 	if err != nil {
 		log.Printf("Error preparing token transfer from %s to %s: %v", fromAddress, toAddress, err)
-		return txResult, err
+		return models.TransactionBlockResponse{}, err
 	}
-	log.Printf("Token transfer transaction prepared from %s to %s. Digest (from unsafe_moveCall): %s",
-		fromAddress, toAddress, txResult.Get("digest").String())
-	return txResult, nil
+	log.Printf("Token transfer transaction prepared from %s to %s. TxBytes: %s",
+		fromAddress, toAddress, txBlockResponse.TxBytes)
+	return txBlockResponse, nil
 }
 
 // MintGameTokens prepares a transaction to mint new game tokens.
-// This typically requires the sender to have administrative/minter capabilities defined in the Move contract.
-func (s *EconomySuiService) MintGameTokens(recipientAddress string, amount uint64, gasBudget uint64) (gjson.Result, error) {
+// Returns TransactionBlockResponse for subsequent signing and execution.
+func (s *EconomySuiService) MintGameTokens(recipientAddress string, amount uint64, gasBudget uint64) (models.TransactionBlockResponse, error) {
 	functionName := "mint_game_tokens" // Placeholder for your Move mint function
 	log.Printf("Preparing to mint %d game tokens to %s. Admin sender: %s", amount, recipientAddress, s.senderAddress)
 
@@ -137,10 +122,9 @@ func (s *EconomySuiService) MintGameTokens(recipientAddress string, amount uint6
 		recipientAddress,
 		strconv.FormatUint(amount, 10),
 	}
-	// Assuming the game token type is implicitly known by the `mint_game_tokens` function in `s.packageID::s.moduleName`
-	typeArgs := []string{}
+	typeArgs := []string{} // Assuming coin type is fixed in the mint function
 
-	txResult, err := s.suiClient.CallMoveFunction(
+	txBlockResponse, err := s.suiClient.MoveCall(
 		s.senderAddress, // Admin/Treasury address with minting capability
 		s.packageID,
 		s.moduleName,
@@ -153,30 +137,29 @@ func (s *EconomySuiService) MintGameTokens(recipientAddress string, amount uint6
 
 	if err != nil {
 		log.Printf("Error preparing mint_game_tokens transaction for %s: %v", recipientAddress, err)
-		return txResult, err
+		return models.TransactionBlockResponse{}, err
 	}
-	log.Printf("Mint game tokens transaction prepared for %s. Digest (from unsafe_moveCall): %s",
-		recipientAddress, txResult.Get("digest").String())
-	return txResult, nil
+	log.Printf("Mint game tokens transaction prepared for %s. TxBytes: %s",
+		recipientAddress, txBlockResponse.TxBytes)
+	return txBlockResponse, nil
 }
 
 // BurnGameTokens prepares a transaction to burn game tokens.
-// Requires the `burnerAddress` to own the `tokenObjectIDs` and sign the transaction.
-func (s *EconomySuiService) BurnGameTokens(burnerAddress string, tokenObjectIDs []string, gasBudget uint64) (gjson.Result, error) {
+// Returns TransactionBlockResponse for subsequent signing and execution.
+func (s *EconomySuiService) BurnGameTokens(burnerAddress string, tokenObjectIDs []string, gasBudget uint64) (models.TransactionBlockResponse, error) {
 	functionName := "burn_game_tokens" // Placeholder for your Move burn function
 	log.Printf("Preparing to burn game tokens (IDs: %v) from %s.", tokenObjectIDs, burnerAddress)
 
 	if len(tokenObjectIDs) == 0 {
-		return gjson.Result{}, fmt.Errorf("at least one tokenObjectID must be provided to burn")
+		return models.TransactionBlockResponse{}, fmt.Errorf("at least one tokenObjectID must be provided to burn")
 	}
 
 	callArgs := []interface{}{
 		tokenObjectIDs, // This would likely be a vector of Coin objects or their IDs
 	}
-	// Assuming the game token type is implicitly known by the `burn_game_tokens` function
-	typeArgs := []string{}
+	typeArgs := []string{} // Assuming coin type is fixed in the burn function
 
-	txResult, err := s.suiClient.CallMoveFunction(
+	txBlockResponse, err := s.suiClient.MoveCall(
 		burnerAddress, // The owner of the tokens to be burned
 		s.packageID,
 		s.moduleName,
@@ -188,9 +171,9 @@ func (s *EconomySuiService) BurnGameTokens(burnerAddress string, tokenObjectIDs 
 	)
 	if err != nil {
 		log.Printf("Error preparing burn_game_tokens transaction for tokens %v: %v", tokenObjectIDs, err)
-		return txResult, err
+		return models.TransactionBlockResponse{}, err
 	}
-	log.Printf("Burn game tokens transaction prepared for tokens %v. Digest (from unsafe_moveCall): %s",
-		tokenObjectIDs, txResult.Get("digest").String())
-	return txResult, nil
+	log.Printf("Burn game tokens transaction prepared for tokens %v. TxBytes: %s",
+		tokenObjectIDs, txBlockResponse.TxBytes)
+	return txBlockResponse, nil
 }

@@ -1,10 +1,12 @@
 package game
 
 import (
+	"fmt"
 	"log"
 	"math/rand"
 	"time"
-	// "github.com/phuhao00/suigserver/server/internal/sui" // For interacting with Sui blockchain
+
+	"github.com/phuhao00/suigserver/server/internal/sui" // For interacting with Sui blockchain
 )
 
 // CombatantStats represents the basic stats for a combatant.
@@ -21,51 +23,100 @@ type CombatantStats struct {
 
 // CombatResult holds the outcome of a combat interaction.
 type CombatResult struct {
-	AttackerID      string
-	DefenderID      string
-	DamageDealt     int
-	DefenderHealth  int // Defender's health after the attack
-	AttackerHealth  int // Attacker's health (if defender counter-attacks or reflects)
-	IsCriticalHit   bool
-	IsEvaded        bool
-	CombatLog       []string // Log of events during this combat turn/round
+	AttackerID         string
+	DefenderID         string
+	DamageDealt        int
+	DefenderHealth     int // Defender's health after the attack
+	AttackerHealth     int // Attacker's health (if defender counter-attacks or reflects)
+	IsCriticalHit      bool
+	IsEvaded           bool
+	CombatLog          []string // Log of events during this combat turn/round
 	IsDefenderDefeated bool
 }
 
 // CombatEngine handles all combat calculations and logic.
 type CombatEngine struct {
-	// Dependencies, e.g.:
-	// suiClient *sui.SuiClient // For recording combat results on-chain
+	suiCombatService *sui.CombatResultsSuiService // For recording combat results on-chain
 	// dbCache *DBCacheLayer    // For fetching/updating combatant stats if not passed directly
-	baseHitChance     float64
-	baseCritChance    float64
-	baseEvadeChance   float64
-	critDamageBonus   float64 // e.g., 1.5 for 50% extra damage
+	baseHitChance       float64
+	baseCritChance      float64
+	baseEvadeChance     float64
+	critDamageBonus     float64 // e.g., 1.5 for 50% extra damage
 	minDamagePercentage float64 // Minimum percentage of attack power to deal as damage
+	// Configurable parameters
+	skillDefinitions  map[string]interface{} // Placeholder for skill data
+	statusEffectRules map[string]interface{} // Placeholder for status effect rules
+	elementalChart    map[string]interface{} // Placeholder for elemental advantages
 }
 
 // NewCombatEngine creates a new CombatEngine.
-func NewCombatEngine(/*suiClient *sui.SuiClient, dbCache *DBCacheLayer*/) *CombatEngine {
+func NewCombatEngine(suiCombatService *sui.CombatResultsSuiService /*, dbCache *DBCacheLayer*/) *CombatEngine {
 	log.Println("Initializing Combat Engine...")
 	rand.Seed(time.Now().UnixNano()) // Seed random number generator
 	return &CombatEngine{
-		// suiClient: suiClient,
+		suiCombatService: suiCombatService,
 		// dbCache: dbCache,
-		baseHitChance:     0.90, // 90% base chance to hit
-		baseCritChance:    0.10, // 10% base chance for a critical hit
-		baseEvadeChance:   0.05, // 5% base chance to evade
-		critDamageBonus:   1.5,
+		baseHitChance:       0.90, // 90% base chance to hit
+		baseCritChance:      0.10, // 10% base chance for a critical hit
+		baseEvadeChance:     0.05, // 5% base chance to evade
+		critDamageBonus:     1.5,
 		minDamagePercentage: 0.1, // Ensure at least 10% of attack power as damage if hit
 	}
 }
 
 // Start begins the combat engine operations.
-func (ce *CombatEngine) Start() {
-	log.Println("Combat Engine started.")
-	// TODO: Initialize combat parameters or systems from config if needed
-	// Example: Load skill definitions, status effect rules, elemental advantages etc.
+// This is where you might load configurations for skills, effects, etc.
+func (ce *CombatEngine) Start(config *CombatEngineConfig) { // Assuming a config struct
+	log.Println("Combat Engine starting...")
+	if config != nil {
+		// Example: Load skill definitions from config
+		ce.skillDefinitions = config.SkillDefinitions
+		log.Printf("Loaded %d skill definitions.", len(ce.skillDefinitions))
+
+		// Example: Load status effect rules
+		ce.statusEffectRules = config.StatusEffectRules
+		log.Printf("Loaded %d status effect rules.", len(ce.statusEffectRules))
+
+		// Example: Load elemental chart
+		ce.elementalChart = config.ElementalChart
+		log.Printf("Loaded elemental chart with %d entries.", len(ce.elementalChart))
+
+		// Override base chances if provided in config
+		if config.BaseHitChance > 0 {
+			ce.baseHitChance = config.BaseHitChance
+		}
+		if config.BaseCritChance > 0 {
+			ce.baseCritChance = config.BaseCritChance
+		}
+		if config.BaseEvadeChance > 0 {
+			ce.baseEvadeChance = config.BaseEvadeChance
+		}
+		if config.CritDamageBonus > 0 {
+			ce.critDamageBonus = config.CritDamageBonus
+		}
+		if config.MinDamagePercentage > 0 {
+			ce.minDamagePercentage = config.MinDamagePercentage
+		}
+	} else {
+		log.Println("Combat Engine started with default parameters (no config provided).")
+	}
+
 	log.Printf("Combat Parameters: HitChance=%.2f, CritChance=%.2f, EvadeChance=%.2f, CritBonus=%.2fx, MinDamageFactor=%.2f",
 		ce.baseHitChance, ce.baseCritChance, ce.baseEvadeChance, ce.critDamageBonus, ce.minDamagePercentage)
+	log.Println("Combat Engine started successfully.")
+}
+
+// CombatEngineConfig holds configuration for the combat engine.
+// This would typically be loaded from a JSON/YAML file.
+type CombatEngineConfig struct {
+	SkillDefinitions    map[string]interface{} `json:"skillDefinitions"`
+	StatusEffectRules   map[string]interface{} `json:"statusEffectRules"`
+	ElementalChart      map[string]interface{} `json:"elementalChart"`
+	BaseHitChance       float64                `json:"baseHitChance,omitempty"`
+	BaseCritChance      float64                `json:"baseCritChance,omitempty"`
+	BaseEvadeChance     float64                `json:"baseEvadeChance,omitempty"`
+	CritDamageBonus     float64                `json:"critDamageBonus,omitempty"`
+	MinDamagePercentage float64                `json:"minDamagePercentage,omitempty"`
 }
 
 // Stop gracefully shuts down the combat engine.
@@ -117,11 +168,10 @@ func (ce *CombatEngine) SimulateCombatTurn(attacker, defender CombatantStats) *C
 	if baseDamage < minDamage {
 		baseDamage = minDamage
 	}
-	if baseDamage <= 0 && minDamage <=0 { // If defense is extremely high and minDamage is 0 or less
+	if baseDamage <= 0 && minDamage <= 0 { // If defense is extremely high and minDamage is 0 or less
 		baseDamage = 0 // No damage dealt, but it was a hit.
 		result.CombatLog = append(result.CombatLog, attacker.ID+" hits "+defender.ID+" but deals no damage (fully mitigated).")
 	}
-
 
 	// 4. Check for critical hit
 	actualDamage := baseDamage
@@ -150,17 +200,45 @@ func (ce *CombatEngine) SimulateCombatTurn(attacker, defender CombatantStats) *C
 	log.Printf("Combat turn result for %s vs %s: Damage: %d, Defender HP: %d. Log: %v",
 		attacker.ID, defender.ID, result.DamageDealt, result.DefenderHealth, result.CombatLog)
 
-	// TODO: Placeholder for recording combat results on Sui blockchain
-	// if ce.suiClient != nil {
-	//     go func() {
-	//         err := ce.suiClient.RecordCombatResult(result) // Assuming such a method exists
-	//         if err != nil {
-	//             log.Printf("Error recording combat result on Sui for %s vs %s: %v", attacker.ID, defender.ID, err)
-	//         } else {
-	//             log.Printf("Combat result for %s vs %s successfully recorded on Sui.", attacker.ID, defender.ID)
-	//         }
-	//     }()
-	// }
+	// Record combat results on Sui blockchain if service is available
+	if ce.suiCombatService != nil && result.IsDefenderDefeated { // Example: Record only if someone is defeated
+		go func(combatOutcome CombatResult) {
+			// Prepare data for Sui. This needs to match CombatResultData in sui package
+			// and the expected arguments of the Move contract.
+			suiCombatData := sui.CombatResultData{
+				CombatLogID:   fmt.Sprintf("%s_vs_%s_%d", combatOutcome.AttackerID, combatOutcome.DefenderID, time.Now().UnixNano()), // Generate a unique ID
+				WinnerAddress: combatOutcome.AttackerID,                                                                              // Assuming attacker wins if defender is defeated
+				LoserAddress:  combatOutcome.DefenderID,
+				Rewards:       map[string]interface{}{"xp_gained": 100, "items_dropped": "none"}, // Placeholder rewards
+				AdditionalData: map[string]interface{}{
+					"damage_dealt":       combatOutcome.DamageDealt,
+					"final_health_c1":    combatOutcome.AttackerHealth, // This might be the attacker's health before this turn
+					"final_health_c2":    combatOutcome.DefenderHealth,
+					"combat_log_onchain": combatOutcome.CombatLog, // Consider if full log is needed on-chain
+				},
+			}
+			// Gas budget for the transaction (example value)
+			var gasBudget uint64 = 10000000
+
+			// The RecordCombatOutcome now returns TransactionBlockResponse (txBytes)
+			// The actual signing and execution should happen elsewhere, e.g., by a dedicated transaction manager
+			// or directly by a service that has access to a signer.
+			// For this example, we'll just log the preparation.
+			txBlockResponse, err := ce.suiCombatService.RecordCombatOutcome(suiCombatData, gasBudget)
+			if err != nil {
+				log.Printf("Error PREPARING transaction for combat result on Sui (%s vs %s): %v",
+					combatOutcome.AttackerID, combatOutcome.DefenderID, err)
+			} else {
+				log.Printf("Transaction for combat result (%s vs %s) PREPARED. TxBytes: %s. Digest (if any from prep): %s",
+					combatOutcome.AttackerID, combatOutcome.DefenderID, txBlockResponse.TxBytes, txBlockResponse.Digest)
+				// In a real system:
+				// 1. Get txBlockResponse.TxBytes
+				// 2. Sign these bytes with the appropriate private key (e.g., a server-held key for system transactions)
+				// 3. Execute the signed transaction using suiClient.ExecuteTransactionBlock(signedTxBytes, signatures, ...)
+				// For simplicity, this example does not implement signing and execution here.
+			}
+		}(*result) // Pass a copy of the result to the goroutine
+	}
 
 	return result
 }

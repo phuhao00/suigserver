@@ -105,11 +105,23 @@ func (a *RoomActor) handleJoinRoomRequest(ctx actor.Context, msg *messages.JoinR
 	// Notify RoomManager about player count change
 	a.notifyManagerPlayerCountChanged(ctx)
 
+	// Prepare list of current players for the response
+	currentPlayersInRoom := make([]string, 0, len(a.players))
+	for playerID := range a.players {
+		// Exclude the joining player from this list if JoinRoomResponse is sent *before* adding them to a.players
+		// However, at this point, the player is already added, so they will be included.
+		// If the intent is to show "other players", then filter msg.PlayerID out.
+		// For now, sending all current players including the newcomer.
+		currentPlayersInRoom = append(currentPlayersInRoom, playerID)
+	}
+
 	// Respond to the joining player
 	ctx.Respond(&messages.JoinRoomResponse{
-		RoomID:  a.roomID,
-		Success: true,
-		// CurrentRoomState: a.getRoomStateSnapshot(), // TODO: Could send current players list etc.
+		RoomID:           a.roomID,
+		Success:          true,
+		CurrentPlayerIDs: currentPlayersInRoom, // Send current players list
+		RoomName:         a.roomName,           // Send room name
+		// Add other relevant room state if needed
 	})
 
 	// Broadcast to other players in the room that a new player joined
@@ -180,7 +192,7 @@ func (a *RoomActor) broadcastMessage(ctx actor.Context, excludePID *actor.PID, m
 	log.Printf("[RoomActor %s] Broadcasting message type %T to %d players (excluding: %v)",
 		a.roomID, message, len(a.players), excludePID != nil)
 
-	for playerID, playerPID := range a.players {
+	for _, playerPID := range a.players {
 		if excludePID != nil && playerPID.Equal(excludePID) {
 			continue // Skip the excluded player
 		}

@@ -12,7 +12,6 @@ import (
 
 	"github.com/asynkron/protoactor-go/actor"
 	"github.com/phuhao00/suigserver/server/internal/actor/messages"
-	// "sui-mmo-server/server/internal/models" // For player data
 )
 
 // PlayerSessionActor manages a single client's connection and game session.
@@ -338,11 +337,4 @@ func (a *PlayerSessionActor) handleForwardToClient(msg *messages.ForwardToClient
 
 func (a *PlayerSessionActor) isAuthenticated() bool {
 	return a.playerID != ""
-}
-
-// Props creates actor.Props for PlayerSessionActor.
-// This is how other actors or the system will spawn PlayerSessionActors.
-// It now requires actorSystem, roomManagerPID, and worldManagerPID.
-func Props(actorSystem *actor.ActorSystem, roomManagerPID *actor.PID, worldManagerPID *actor.PID) *actor.Props {
-	return actor.PropsFromProducer(func() actor.Actor { return NewPlayerSessionActor(actorSystem, roomManagerPID, worldManagerPID) })
 }

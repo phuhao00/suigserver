@@ -1,435 +1,239 @@
 package sui
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"log"
 	"strconv"
-	"time"
+	"strings"
 
-	"github.com/go-resty/resty/v2"
+	"github.com/block-vision/sui-go-sdk/models"
+	"github.com/block-vision/sui-go-sdk/sui"
 	"github.com/tidwall/gjson"
 )
 
-// SuiClient represents a client for interacting with Sui blockchain
+// SuiClient represents a client for interacting with Sui blockchain using sui-go-sdk
 type SuiClient struct {
-	client  *resty.Client
-	nodeURL string
+	sdkClient sui.ISuiAPI
+	nodeURL   string
 }
 
-// TransactionRequest represents a Sui transaction request
-type TransactionRequest struct {
-	Sender           string                 `json:"sender"`
-	PackageObjectID  string                 `json:"packageObjectId"`
-	Module           string                 `json:"module"`
-	Function         string                 `json:"function"`
-	TypeArguments    []string               `json:"typeArguments,omitempty"`
-	Arguments        []interface{}          `json:"arguments"`
-	Gas              string                 `json:"gas,omitempty"`
-	GasBudget        string                 `json:"gasBudget"`
-	GasPrice         string                 `json:"gasPrice,omitempty"`
-}
-
-// TransactionResponse represents a Sui transaction response
-type TransactionResponse struct {
-	TxBytes    string `json:"txBytes"`
-	Gas        Gas    `json:"gas"`
-	InputObjects []InputObject `json:"inputObjects"`
-}
-
-type Gas struct {
-	ObjectID string `json:"objectId"`
-	Version  int    `json:"version"`
-	Digest   string `json:"digest"`
-}
-
-type InputObject struct {
-	ObjectType string `json:"objectType"`
-	ObjectID   string `json:"objectId"`
-	Version    int    `json:"version"`
-	Digest     string `json:"digest"`
-}
-
-// ExecuteTransactionResponse represents the response from executing a transaction
-type ExecuteTransactionResponse struct {
-	Digest          string `json:"digest"`
-	Transaction     Transaction `json:"transaction"`
-	Effects         Effects `json:"effects"`
-	Events          []Event `json:"events"`
-	ObjectChanges   []ObjectChange `json:"objectChanges"`
-	BalanceChanges  []BalanceChange `json:"balanceChanges"`
-	TimestampMs     string `json:"timestampMs"`
-	Checkpoint      string `json:"checkpoint"`
-}
-
-type Transaction struct {
-	Data   TransactionData `json:"data"`
-	TxSignatures []string `json:"txSignatures"`
-}
-
-type TransactionData struct {
-	MessageVersion string `json:"messageVersion"`
-	Transaction    TransactionDetails `json:"transaction"`
-	Sender         string `json:"sender"`
-	GasData        GasData `json:"gasData"`
-}
-
-type TransactionDetails struct {
-	Kind    string `json:"kind"`
-	Inputs  []Input `json:"inputs"`
-	Transactions []TransactionCall `json:"transactions"`
-}
-
-type Input struct {
-	Type      string `json:"type"`
-	ValueType string `json:"valueType,omitempty"`
-	Value     string `json:"value,omitempty"`
-}
-
-type TransactionCall struct {
-	MoveCall *MoveCall `json:"MoveCall,omitempty"`
-}
-
-type MoveCall struct {
-	Package   string        `json:"package"`
-	Module    string        `json:"module"`
-	Function  string        `json:"function"`
-	Arguments []interface{} `json:"arguments"`
-}
-
-type GasData struct {
-	Payment []PaymentObject `json:"payment"`
-	Owner   string          `json:"owner"`
-	Price   string          `json:"price"`
-	Budget  string          `json:"budget"`
-}
-
-type PaymentObject struct {
-	ObjectID string `json:"objectId"`
-	Version  int    `json:"version"`
-	Digest   string `json:"digest"`
-}
-
-type Effects struct {
-	MessageVersion string `json:"messageVersion"`
-	Status         Status `json:"status"`
-	ExecutedEpoch  string `json:"executedEpoch"`
-	GasUsed        GasUsed `json:"gasUsed"`
-	ModifiedAtVersions []ModifiedAtVersion `json:"modifiedAtVersions"`
-	TransactionDigest string `json:"transactionDigest"`
-	Created           []Created `json:"created"`
-	Mutated           []Mutated `json:"mutated"`
-	Deleted           []Deleted `json:"deleted"`
-}
-
-type Status struct {
-	Status string `json:"status"`
-}
-
-type GasUsed struct {
-	ComputationCost string `json:"computationCost"`
-	StorageCost     string `json:"storageCost"`
-	StorageRebate   string `json:"storageRebate"`
-	NonRefundableStorageFee string `json:"nonRefundableStorageFee"`
-}
-
-type ModifiedAtVersion struct {
-	ObjectID       string `json:"objectId"`
-	SequenceNumber string `json:"sequenceNumber"`
-}
-
-type Created struct {
-	Owner     Owner  `json:"owner"`
-	Reference Reference `json:"reference"`
-}
-
-type Mutated struct {
-	Owner     Owner  `json:"owner"`
-	Reference Reference `json:"reference"`
-}
-
-type Deleted struct {
-	ObjectID string `json:"objectId"`
-	Version  int    `json:"version"`
-	Digest   string `json:"digest"`
-}
-
-type Owner struct {
-	AddressOwner string `json:"AddressOwner,omitempty"`
-	ObjectOwner  string `json:"ObjectOwner,omitempty"`
-	Shared       *SharedOwner `json:"Shared,omitempty"`
-}
-
-type SharedOwner struct {
-	InitialSharedVersion string `json:"initial_shared_version"`
-}
-
-type Reference struct {
-	ObjectID string `json:"objectId"`
-	Version  int    `json:"version"`
-	Digest   string `json:"digest"`
-}
-
-type Event struct {
-	ID               EventID `json:"id"`
-	PackageID        string  `json:"packageId"`
-	TransactionModule string `json:"transactionModule"`
-	Sender           string  `json:"sender"`
-	Type             string  `json:"type"`
-	ParsedJSON       interface{} `json:"parsedJson"`
-	Bcs              string  `json:"bcs"`
-	TimestampMs      string  `json:"timestampMs"`
-}
-
-type EventID struct {
-	TxDigest string `json:"txDigest"`
-	EventSeq string `json:"eventSeq"`
-}
-
-type ObjectChange struct {
-	Type         string `json:"type"`
-	Sender       string `json:"sender"`
-	Owner        Owner  `json:"owner"`
-	ObjectType   string `json:"objectType"`
-	ObjectID     string `json:"objectId"`
-	Version      string `json:"version"`
-	PreviousVersion string `json:"previousVersion,omitempty"`
-	Digest       string `json:"digest"`
-}
-
-type BalanceChange struct {
-	Owner    Owner  `json:"owner"`
-	CoinType string `json:"coinType"`
-	Amount   string `json:"amount"`
-}
-
-// NewSuiClient creates a new Sui client
+// NewSuiClient creates a new Sui client using sui-go-sdk
 func NewSuiClient(nodeURL string) *SuiClient {
-	client := resty.New()
-	client.SetTimeout(30 * time.Second)
-	client.SetHeader("Content-Type", "application/json")
-	
 	if nodeURL == "" {
-		nodeURL = "https://fullnode.testnet.sui.io:443"
+		nodeURL = sui.TestnetRPC // Default to testnet if not specified
 	}
-	
+	// Initialize the sui-go-sdk client
+	// The sdk does not require explicit timeout setting in the same way as resty here.
+	// It uses default http client settings which can be customized if needed by creating a custom http.Client.
+	opts := sui.DefaultClientOptions()
+	opts.RpcUrl = nodeURL
+
+	cli := sui.NewSuiClient(opts)
+
 	return &SuiClient{
-		client:  client,
-		nodeURL: nodeURL,
+		sdkClient: cli,
+		nodeURL:   nodeURL,
 	}
-}
-
-// makeRPCCall makes a JSON-RPC call to the Sui node
-func (c *SuiClient) makeRPCCall(method string, params []interface{}) (gjson.Result, error) {
-	requestBody := map[string]interface{}{
-		"jsonrpc": "2.0",
-		"id":      1,
-		"method":  method,
-		"params":  params,
-	}
-
-	resp, err := c.client.R().
-		SetBody(requestBody).
-		Post(c.nodeURL)
-
-	if err != nil {
-		return gjson.Result{}, fmt.Errorf("failed to make RPC call: %w", err)
-	}
-
-	if resp.StatusCode() != 200 {
-		return gjson.Result{}, fmt.Errorf("RPC call failed with status %d: %s", resp.StatusCode(), resp.String())
-	}
-
-	result := gjson.Parse(resp.String())
-	
-	if result.Get("error").Exists() {
-		return gjson.Result{}, fmt.Errorf("RPC error: %s", result.Get("error").String())
-	}
-
-	return result.Get("result"), nil
 }
 
 // GetObject retrieves an object from Sui
-func (c *SuiClient) GetObject(objectID string) (gjson.Result, error) {
-	params := []interface{}{
-		objectID,
-		map[string]interface{}{
-			"showType":    true,
-			"showOwner":   true,
-			"showPreviousTransaction": true,
-			"showDisplay": false,
-			"showContent": true,
-			"showBcs":     false,
-			"showStorageRebate": true,
+func (c *SuiClient) GetObject(objectID string) (models.SuiObjectResponse, error) {
+	return c.sdkClient.SuiGetObject(context.Background(), models.SuiGetObjectRequest{
+		ObjectId: objectID,
+		Options: &models.SuiObjectDataOptions{
+			ShowType:                true,
+			ShowOwner:               true,
+			ShowPreviousTransaction: true,
+			ShowDisplay:             false,
+			ShowContent:             true,
+			ShowBcs:                 false,
+			ShowStorageRebate:       true,
 		},
-	}
-
-	return c.makeRPCCall("sui_getObject", params)
+	})
 }
 
 // GetOwnedObjects retrieves objects owned by an address
-func (c *SuiClient) GetOwnedObjects(address string, objectType *string) (gjson.Result, error) {
-	params := []interface{}{
-		address,
-		map[string]interface{}{
-			"filter": map[string]interface{}{
-				"StructType": objectType,
-			},
-			"options": map[string]interface{}{
-				"showType":    true,
-				"showOwner":   true,
-				"showPreviousTransaction": true,
-				"showDisplay": false,
-				"showContent": true,
-				"showBcs":     false,
-				"showStorageRebate": true,
+func (c *SuiClient) GetOwnedObjects(address string, objectType *string) (models.SuiGetOwnedObjectsResponse, error) {
+	var filter interface{}
+	if objectType != nil {
+		filter = map[string]interface{}{"StructType": *objectType}
+	}
+
+	return c.sdkClient.SuiGetOwnedObjects(context.Background(), models.SuiGetOwnedObjectsRequest{
+		Address: address,
+		Query: &models.SuiObjectResponseQuery{
+			Filter: filter,
+			Options: &models.SuiObjectDataOptions{
+				ShowType:                true,
+				ShowOwner:               true,
+				ShowPreviousTransaction: true,
+				ShowDisplay:             false,
+				ShowContent:             true,
+				ShowBcs:                 false,
+				ShowStorageRebate:       true,
 			},
 		},
-	}
-
-	return c.makeRPCCall("sui_getOwnedObjects", params)
+	})
 }
 
-// MoveCall executes a Move function call
-func (c *SuiClient) MoveCall(sender, packageID, module, function string, typeArguments []string, arguments []interface{}, gas string, gasBudget uint64) (gjson.Result, error) {
-	params := []interface{}{
-		sender,
-		packageID,
-		module,
-		function,
-		typeArguments,
-		arguments,
-		gas,
-		strconv.FormatUint(gasBudget, 10),
-		strconv.FormatUint(1000, 10), // gas price
-	}
+// MoveCall prepares a transaction block for a Move function call.
+// Note: sui-go-sdk's MoveCall is part of building a transaction block.
+// This function will now return a models.TransactionBlockResponse which contains txBytes.
+// The actual execution requires signing and then calling ExecuteTransactionBlock.
+func (c *SuiClient) MoveCall(sender, packageID, module, function string, typeArguments []string, arguments []interface{}, gas string, gasBudget uint64) (models.TransactionBlockResponse, error) {
+	gasBudgetStr := strconv.FormatUint(gasBudget, 10)
+	// gasPriceStr := strconv.FormatUint(1000, 10) // Example gas price
 
-	return c.makeRPCCall("unsafe_moveCall", params)
+	return c.sdkClient.SuiMoveCall(context.Background(), models.SuiMoveCallRequest{
+		Signer:          sender,
+		PackageObjectId: packageID,
+		Module:          module,
+		Function:        function,
+		TypeArguments:   typeArguments,
+		Arguments:       arguments,
+		Gas:             &gas,
+		GasBudget:       gasBudgetStr,
+		// GasPrice:      gasPriceStr, // GasPrice is often fetched dynamically or set globally
+	})
 }
 
 // ExecuteTransactionBlock executes a transaction block
-func (c *SuiClient) ExecuteTransactionBlock(txBytes string, signatures []string) (gjson.Result, error) {
-	params := []interface{}{
-		txBytes,
-		signatures,
-		map[string]interface{}{
-			"showInput":         true,
-			"showRawInput":      false,
-			"showEffects":       true,
-			"showEvents":        true,
-			"showObjectChanges": true,
-			"showBalanceChanges": true,
+func (c *SuiClient) ExecuteTransactionBlock(txBytes string, signatures []string) (models.SuiExecuteTransactionBlockResponse, error) {
+	return c.sdkClient.SuiExecuteTransactionBlock(context.Background(), models.SuiExecuteTransactionBlockRequest{
+		TxBytes:    txBytes,
+		Signatures: signatures,
+		Options: &models.SuiTransactionBlockResponseOptions{
+			ShowInput:          true,
+			ShowRawInput:       false,
+			ShowEffects:        true,
+			ShowEvents:         true,
+			ShowObjectChanges:  true,
+			ShowBalanceChanges: true,
 		},
-		"WaitForLocalExecution",
-	}
-
-	return c.makeRPCCall("sui_executeTransactionBlock", params)
+		RequestType: "WaitForLocalExecution",
+	})
 }
 
 // QueryEvents queries events from Sui
-func (c *SuiClient) QueryEvents(query map[string]interface{}, cursor *string, limit *uint64, descendingOrder bool) (gjson.Result, error) {
-	params := []interface{}{
-		query,
-	}
-	
-	if cursor != nil {
-		params = append(params, *cursor)
-	} else {
-		params = append(params, nil)
-	}
-	
+func (c *SuiClient) QueryEvents(query models.EventFilter, cursor *string, limit *uint64, descendingOrder bool) (models.SuiQueryEventsResponse, error) {
+	var actualLimit uint64 = 50 // Default limit
 	if limit != nil {
-		params = append(params, *limit)
-	} else {
-		params = append(params, 50) // default limit
+		actualLimit = *limit
 	}
-	
-	params = append(params, descendingOrder)
 
-	return c.makeRPCCall("suix_queryEvents", params)
+	var actualCursor *models.EventId = nil
+	if cursor != nil {
+		// Assuming cursor is in "txDigest:eventSeq" format
+		// This needs proper parsing if sui-go-sdk expects models.EventId
+		// For simplicity, this example assumes the SDK handles string cursor directly or requires a different format
+		// If models.EventId is required, you'll need to parse *cursor into its components.
+		// For now, we'll pass nil if direct string cursor isn't supported, or adjust if the SDK has a way.
+		// Example: parts := strings.Split(*cursor, ":"); if len(parts) == 2 { actualCursor = &models.EventId{TxDigest: parts[0], EventSeq: parts[1]}}
+		parts := strings.SplitN(*cursor, ":", 2)
+		if len(parts) == 2 {
+			eventSeqUint, err := strconv.ParseUint(parts[1], 10, 64)
+			if err == nil {
+				actualCursor = &models.EventId{TxDigest: parts[0], EventSeq: eventSeqUint}
+			} else {
+				log.Printf("Warning: Could not parse EventSeq from cursor '%s': %v", *cursor, err)
+				// Decide if this should be a hard error or proceed with nil cursor
+			}
+		} else {
+			log.Printf("Warning: Could not parse cursor string '%s' into TxDigest and EventSeq", *cursor)
+			// Decide if this should be a hard error or proceed with nil cursor
+		}
+	}
+
+	return c.sdkClient.SuiQueryEvents(context.Background(), models.SuiQueryEventsRequest{
+		Query:           query,
+		Cursor:          actualCursor,
+		Limit:           actualLimit,
+		DescendingOrder: descendingOrder,
+	})
 }
 
 // GetCoins retrieves coins owned by an address
-func (c *SuiClient) GetCoins(address, coinType string) (gjson.Result, error) {
-	params := []interface{}{
-		address,
-		coinType,
-	}
-
-	return c.makeRPCCall("suix_getCoins", params)
+func (c *SuiClient) GetCoins(address, coinType string) (models.SuiGetCoinsResponse, error) {
+	return c.sdkClient.SuiGetCoins(context.Background(), models.SuiGetCoinsRequest{
+		Owner:    address,
+		CoinType: &coinType,
+	})
 }
 
 // GetBalance gets the balance for a specific coin type
-func (c *SuiClient) GetBalance(address, coinType string) (gjson.Result, error) {
-	params := []interface{}{
-		address,
-		coinType,
-	}
-
-	return c.makeRPCCall("suix_getBalance", params)
+func (c *SuiClient) GetBalance(address, coinType string) (models.SuiGetBalanceResponse, error) {
+	return c.sdkClient.SuiGetBalance(context.Background(), models.SuiGetBalanceRequest{
+		Owner:    address,
+		CoinType: &coinType,
+	})
 }
 
-// Legacy Client struct for backward compatibility
+// Legacy Client struct for backward compatibility.
+// It now embeds the new SuiClient which uses sui-go-sdk.
 type Client struct {
 	*SuiClient
 }
 
+// NewClient creates a new legacy client wrapper.
+// It initializes SuiClient with a default nodeURL if not specified.
 func NewClient() (*Client, error) {
-	suiClient := NewSuiClient("https://fullnode.testnet.sui.io:443")
-	
+	// Consider making nodeURL configurable, e.g., from environment variables or config file
+	suiClient := NewSuiClient(sui.TestnetRPC) // Or your preferred default
 	return &Client{
 		SuiClient: suiClient,
 	}, nil
 }
 
-// CallMoveFunction is a simplified wrapper around unsafe_moveCall.
-// It requires senderAddress, packageID, and gasObjectID to be configured or passed.
-// This function is a placeholder and needs proper parameters for actual use.
+// CallMoveFunction is a simplified wrapper for preparing a Move call transaction.
+// It now uses the new SuiClient's MoveCall method.
+// Note: This function still only prepares the transaction (returns txBytes).
+// It does not sign or execute it.
 func (c *Client) CallMoveFunction(
-	senderAddress string, // Example: "0xYOUR_SENDER_ADDRESS"
-	packageID string,     // Example: "0xYOUR_PACKAGE_ID"
+	senderAddress string,
+	packageID string,
 	module string,
 	functionName string,
-	typeArgs []string,    // Specific type arguments for the Move function, if any
-	callArgs []interface{}, // Arguments for the Move function
-	gasObjectID string,   // Object ID of the gas coin to be used for payment
-	gasBudget uint64,     // Budget for gas in MIST
-) (gjson.Result, error) {
-	log.Printf("Calling Move function: Package=%s, Module=%s, Function=%s, Sender=%s", packageID, module, functionName, senderAddress)
+	typeArgs []string,
+	callArgs []interface{},
+	gasObjectID string, // Gas object ID to be used for payment
+	gasBudget uint64,   // Budget for gas in MIST
+) (models.TransactionBlockResponse, error) { // Return type changed to models.TransactionBlockResponse
+	log.Printf("Preparing Move call: Package=%s, Module=%s, Function=%s, Sender=%s", packageID, module, functionName, senderAddress)
 	log.Printf("Type Args: %v", typeArgs)
 	log.Printf("Call Args: %v", callArgs)
 	log.Printf("Gas Object: %s, Gas Budget: %d", gasObjectID, gasBudget)
 
 	if senderAddress == "" || packageID == "" || gasObjectID == "" {
-		errMsg := "senderAddress, packageID, and gasObjectID must be provided for CallMoveFunction"
+		errMsg := "senderAddress, packageID, and gasObjectID must be provided"
 		log.Println(errMsg)
-		return gjson.Result{}, fmt.Errorf(errMsg)
+		return models.TransactionBlockResponse{}, fmt.Errorf(errMsg)
 	}
 	if gasBudget == 0 {
-		gasBudget = 10000000 // Default gas budget if not specified, e.g., 0.01 SUI
+		gasBudget = 10000000 // Default gas budget
 		log.Printf("Using default gas budget: %d", gasBudget)
 	}
 
-	// The `unsafe_moveCall` expects arguments to be in specific formats (e.g., strings for object IDs).
-	// Ensure `callArgs` are properly formatted based on the target Move function's signature.
-	// For example, object IDs should be strings, numbers as strings or numbers based on type, etc.
-
-	// This uses the embedded SuiClient's MoveCall method.
-	result, err := c.SuiClient.MoveCall(senderAddress, packageID, module, functionName, typeArgs, callArgs, gasObjectID, gasBudget)
+	// Use the embedded SuiClient's MoveCall method
+	// The gas parameter to c.SuiClient.MoveCall should be the gas object ID string.
+	txBlockResponse, err := c.SuiClient.MoveCall(senderAddress, packageID, module, functionName, typeArgs, callArgs, gasObjectID, gasBudget)
 	if err != nil {
-		log.Printf("Error calling Move function %s::%s::%s: %v. Raw Response: %s", packageID, module, functionName, err, result.Raw)
-		return result, fmt.Errorf("MoveCall failed for %s::%s: %w", module, functionName, err)
+		log.Printf("Error preparing Move call %s::%s::%s: %v", packageID, module, functionName, err)
+		return models.TransactionBlockResponse{}, fmt.Errorf("MoveCall preparation failed for %s::%s: %w", module, functionName, err)
 	}
 
-	log.Printf("Move function %s::%s::%s called successfully. Digest: %s", packageID, module, functionName, result.Get("digest").String())
-	// The result from unsafe_moveCall is a JSON object containing txBytes, gas summary, and input objects.
-	// To get the actual effects or created objects, this transaction needs to be signed and executed
-	// via `sui_executeTransactionBlock`. This function only prepares the transaction.
-	// For a complete flow, one might:
-	// 1. Call `unsafe_moveCall` (or `sui_DevInspectTransactionBlock` for simulation).
-	// 2. Get `txBytes` from the response.
-	// 3. Sign `txBytes` using the sender's private key (client-side or secure enclave).
-	// 4. Call `sui_executeTransactionBlock` with signed transaction.
-	// This simplified `CallMoveFunction` does not perform signing or execution.
-	return result, nil
+	log.Printf("Move call %s::%s::%s prepared successfully. TxBytes: %s", packageID, module, functionName, txBlockResponse.TxBytes)
+	// The response now directly gives TxBytes. Further steps (signing, execution) are needed.
+	// This function's responsibility ends with providing the transaction bytes.
+	return txBlockResponse, nil
+}
+
+// Placeholder for gjson.Result if some legacy code absolutely needs it.
+// Ideally, refactor away from gjson.Result towards specific SDK types.
+func adaptToGJSON(data interface{}) (gjson.Result, error) {
+	// This is a placeholder. Proper adaptation would involve marshalling `data` to JSON
+	// and then parsing with gjson, or directly constructing gjson.Result if feasible.
+	// For now, it suggests that this adaptation might be complex or lossy.
+	log.Println("adaptToGJSON is a placeholder and may not function correctly.")
+	return gjson.Parse(""), fmt.Errorf("adaptToGJSON not fully implemented")
 }

@@ -1,52 +1,6 @@
 package game
 
 import (
-	"log"
-	"net"
-	"time"
-
-	"github.com/phuhao00/suigserver/server/internal/sui"
-)
-
-type Server struct {
-	listener  net.Listener
-	suiClient *sui.Client
-	quit      chan struct{}
-}
-
-func NewServer(suiClient *sui.Client) *Server {
-	return &Server{
-		suiClient: suiClient,
-		quit:      make(chan struct{}),
-	}
-}
-
-func (s *Server) Run() {
-	var err error
-	s.listener, err = net.Listen("tcp", ":9000")
-	if err != nil {
-		log.Fatalf("listen error: %v", err)
-	}
-	log.Println("Game server started on :9000")
-
-	for {
-		conn, err := s.listener.Accept()
-		if err != nil {
-			select {
-			case <-s.quit:
-				return
-			default:
-				log.Printf("accept error: %v", err)
-				continue
-			}
-		}
-		go s.handleConn(conn)
-	}
-}
-
-package game
-
-import (
 	"bufio"
 	"encoding/json"
 	"io"
@@ -134,9 +88,14 @@ func (s *Server) handleConnection(conn net.Conn) {
 		conn.Close()
 	}()
 
-	// TODO: Protocol Parsing: Implement a more robust protocol than simple newline-delimited JSON.
-	//       Consider length-prefixing messages or using a binary format like Protocol Buffers.
-	//       For now, we'll use newline-delimited JSON for simplicity.
+	// TODO (Protocol Parsing): The current newline-delimited JSON is simple but not robust for production.
+	// Consider alternatives like:
+	//    1. Length-Prefixing: Send the length of the JSON message before the JSON data itself.
+	//       The server reads the length, then reads that many bytes for the message.
+	//    2. Binary Formats: Protocol Buffers, MessagePack, or FlatBuffers offer more efficient
+	//       serialization and deserialization, and often include schema evolution support.
+	//    3. WebSockets: If client is browser-based, WebSockets provide a message-based protocol.
+	log.Println("[handleConnection] Using simple newline-delimited JSON. For production, consider a more robust protocol.")
 	reader := bufio.NewReader(conn)
 	isAuthenticated := false // Basic authentication state for this connection
 	playerID := ""
@@ -167,9 +126,13 @@ func (s *Server) handleConnection(conn net.Conn) {
 			continue
 		}
 
-		// TODO: Authentication: Implement proper authentication logic.
-		//       This could involve checking a token against a database or auth service.
-		//       For now, a simple "AUTH" message type is handled.
+		// TODO (Authentication): Current authentication is a placeholder. Proper authentication should involve:
+		//    1. Secure Token Generation: Upon successful login (e.g., username/password, OAuth), issue a secure,
+		//       session token (e.g., JWT).
+		//    2. Token Verification: For each request (or upon connection for stateful protocols), validate the token's
+		//       signature, expiration, and any claims. This might involve a database lookup or a call to an auth service.
+		//    3. Secure Storage: Store session information securely if needed.
+		//    4. HTTPS/TLS: Ensure transport layer security for all authentication exchanges.
 		if !isAuthenticated {
 			if msg.Type == "AUTH" {
 				authPayloadMap, ok := msg.Payload.(map[string]interface{})
@@ -178,17 +141,18 @@ func (s *Server) handleConnection(conn net.Conn) {
 					s.sendErrorResponse(conn, "AUTH_FAILED", "Invalid auth payload structure.")
 					continue
 				}
-				// Example: Simple token check
 				pID, _ := authPayloadMap["playerId"].(string)
 				token, _ := authPayloadMap["token"].(string)
 
-				if pID != "" && token == "dummy_secret_token" { // Replace with real auth
+				// Placeholder: In a real system, `token` would be validated against a session store or auth service.
+				// `playerID` might be derived from the validated token, not taken directly from payload after auth.
+				if pID != "" && token == "dummy_secret_token" { // Replace with real auth logic
 					isAuthenticated = true
-					playerID = pID
-					log.Printf("Player %s (%s) authenticated successfully.", playerID, conn.RemoteAddr())
+					playerID = pID // In real auth, playerID would come from validated token
+					log.Printf("Player %s (%s) authenticated successfully (using placeholder auth).", playerID, conn.RemoteAddr())
 					s.sendResponse(conn, "AUTH_SUCCESS", map[string]string{"playerId": playerID, "status": "Authenticated"})
 				} else {
-					log.Printf("Authentication failed for %s. PlayerID: '%s', Token: '%s'", conn.RemoteAddr(), pID, token)
+					log.Printf("Authentication failed for %s. PlayerID: '%s', Token: '%s' (placeholder auth).", conn.RemoteAddr(), pID, token)
 					s.sendErrorResponse(conn, "AUTH_FAILED", "Invalid credentials.")
 				}
 			} else {
@@ -198,8 +162,13 @@ func (s *Server) handleConnection(conn net.Conn) {
 			continue // Require authentication before processing other messages
 		}
 
-		// TODO: Message Handling: Route authenticated messages to appropriate game logic handlers or actors.
-		//       This is where commands like "MOVE", "ATTACK", "CHAT" would be processed.
+		// TODO (Message Handling): This switch statement is a basic router. For a scalable system:
+		//    1. Actor-Based Handling: Each connection/player session could be managed by an actor (e.g., PlayerSessionActor).
+		//       Messages would be forwarded to the relevant actor. (Protoactor-go setup is commented out).
+		//    2. Command Pattern: Define command objects for each message type, processed by handlers.
+		//    3. Service Layer: Route messages to specific service functions that encapsulate business logic.
+		//    The choice depends on concurrency model, state management needs, and overall architecture.
+		log.Printf("[handleConnection] Authenticated message type '%s' from player %s. Routing (placeholder)...", msg.Type, playerID)
 		switch msg.Type {
 		case "PLAYER_ACTION":
 			log.Printf("Player %s (%s) performed action: %+v", playerID, conn.RemoteAddr(), msg.Payload)
@@ -258,22 +227,4 @@ func (s *Server) Stop() {
 	// by tracking active connections or session actors.
 	time.Sleep(1 * time.Second)
 	log.Println("Game server stopped.")
-}
-		if err != nil {
-			log.Printf("read error: %v", err)
-			return
-		}
-		log.Printf("Received: %s", string(buf[:n]))
-		// 示例：与Sui交互
-		s.suiClient.CallMoveFunction("game", "on_message", []interface{}{string(buf[:n])})
-		conn.Write([]byte("pong"))
-	}
-}
-
-func (s *Server) Stop() {
-	close(s.quit)
-	if s.listener != nil {
-		s.listener.Close()
-	}
-	time.Sleep(time.Second) // 等待连接关闭
 }

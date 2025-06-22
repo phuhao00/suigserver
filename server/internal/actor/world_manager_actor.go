@@ -57,21 +57,22 @@ func (a *WorldManagerActor) Receive(ctx actor.Context) {
 	case *messages.PlayerLeftWorld:
 		a.handlePlayerLeftWorld(ctx, msg)
 
-	// case *messages.UpdateWorldState:
-	//  log.Printf("[WorldManagerActor %s] Received UpdateWorldState: %+v", ctx.Self().Id, msg)
-	//  // TODO: Handle world state updates from game logic or other systems.
-	//  // This could involve:
-	//  // - Updating global game parameters.
-	//  // - Triggering world events (e.g., weather changes, NPC invasions).
-	//  // - Persisting changes to a database.
-	//  // - Forwarding relevant updates to RegionManagerActors or directly to players.
-	//  // Example:
-	//  // if update, ok := msg.Data.(MyWorldParameterUpdate); ok {
-	//  //    a.worldParameters[update.Key] = update.Value
-	//  //    log.Printf("[WorldManagerActor] World parameter '%s' updated to '%v'", update.Key, update.Value)
-	//  //    a.persistWorldParameters()
-	//  //    a.broadcastWorldUpdateToRegions(&messages.WorldParameterChanged{Key: update.Key, Value: update.Value})
-	//  // }
+	case *messages.UpdateWorldState:
+		log.Printf("[WorldManagerActor %s] Received UpdateWorldState with data: %+v", ctx.Self().Id, msg.Data)
+		// TODO: Handle world state updates from game logic or other systems.
+		// This could involve:
+		// - Updating global game parameters (e.g., a.worldParameters[key] = value).
+		// - Triggering world events (e.g., weather changes, NPC invasions) by sending messages to other actors or systems.
+		// - Persisting changes to a database.
+		// - Forwarding relevant updates to RegionManagerActors or directly to players.
+		// Example:
+		// if updateData, ok := msg.Data.(map[string]interface{}); ok {
+		//    for key, value := range updateData {
+		//        log.Printf("[WorldManagerActor] Processing world state update: %s = %v", key, value)
+		//        // a.applyWorldStateChange(key, value)
+		//    }
+		// }
+		log.Println("[WorldManagerActor] Placeholder: World state update processing logic would go here.")
 
 	default:
 		log.Printf("[WorldManagerActor %s] Received unknown message: %T %+v", ctx.Self().Id, msg, msg)
@@ -99,6 +100,7 @@ func (a *WorldManagerActor) handlePlayerEnteredWorld(ctx actor.Context, msg *mes
 	// 3. Notify nearby players or systems about the new player's presence if necessary (e.g., via region actor).
 	// 4. Send initial world state or welcome pack to the player (e.g. list of nearby interactables, current global events).
 	//    Example: ctx.Send(msg.PlayerPID, &messages.WorldWelcomeInfo{...})
+	log.Printf("[WorldManagerActor] Placeholder: Assign player %s to region, load data, notify systems, send welcome.", msg.PlayerID)
 }
 
 func (a *WorldManagerActor) handlePlayerLeftWorld(ctx actor.Context, msg *messages.PlayerLeftWorld) {
@@ -122,6 +124,7 @@ func (a *WorldManagerActor) handlePlayerLeftWorld(ctx actor.Context, msg *messag
 	//             }
 	// 2. Trigger saving of player's world-specific persistent data (e.g., last location in world).
 	// 3. Clean up any global resources or subscriptions associated with the player in the world context.
+	log.Printf("[WorldManagerActor] Placeholder: Notify region, save player %s world data, clean up resources.", msg.PlayerID)
 }
 
 // PropsForWorldManager creates actor.Props for WorldManagerActor.

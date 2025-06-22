@@ -34,15 +34,18 @@ func main() {
 	// --- Spawn Top-Level Actors ---
 	// RoomManagerActor
 	roomManagerProps := internalActor.PropsForRoomManager(actorSystem)
-	roomManagerPID := actorSystem.Root.SpawnNamed(roomManagerProps, "room-manager")
+	named, err := actorSystem.Root.SpawnNamed(roomManagerProps, "room-manager")
+	roomManagerPID := named
 	log.Printf("RoomManagerActor spawned with PID: %s", roomManagerPID.String())
 
 	// Spawn WorldManagerActor
 	worldManagerProps := internalActor.PropsForWorldManager(actorSystem)
-	worldManagerPID := actorSystem.Root.SpawnNamed(worldManagerProps, "world-manager")
+	spawnNamed, err := actorSystem.Root.SpawnNamed(worldManagerProps, "world-manager")
+	worldManagerPID := spawnNamed
 	log.Printf("WorldManagerActor spawned with PID: %s", worldManagerPID.String())
 
 	// TODO: Spawn other top-level actors as needed (e.g., PlayerDataManagerActor, GameEventManagerActor)
+	log.Println("Placeholder: Additional top-level actors (PlayerDataManager, GameEventManager) would be spawned here if defined.")
 	// Example for DBCacheLayer (if it were an actor, or if its lifecycle is managed here)
 	// dbConfig := game.DBConfig{Host: "localhost", Port: 5432, User: "user", Password: "password", DBName: "gamedb", SSLMode: "disable"}
 	// redisConfig := game.RedisConfig{Addr: "localhost:6379"}
@@ -98,6 +101,7 @@ func main() {
 	}
 
 	// TODO: Stop other top-level actors (e.g., PlayerDataManagerActor) in appropriate order
+	log.Println("Placeholder: Additional top-level actors would be stopped here if they were spawned.")
 
 	// Shutdown actor system
 	// This will wait for all actors to stop.
