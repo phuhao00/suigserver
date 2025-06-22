@@ -5,8 +5,9 @@ import (
 	"fmt"
 	"log"
 	"strconv"
-
-	"github.com/tidwall/gjson"
+	// "github.com/tidwall/gjson" // Will be removed as gjson.Result is no longer returned by CallMoveFunction
+	"github.com/block-vision/sui-go-sdk/models"
+	"github.com/phuhao00/suigserver/server/internal/utils"
 )
 
 // ProposalData defines the structure for creating a new governance proposal.
@@ -20,24 +21,27 @@ type ProposalData struct {
 
 // GovernanceSuiService interacts with the Governance contract(s) on the Sui blockchain.
 type GovernanceSuiService struct {
-	suiClient     *Client
-	packageID     string // ID of the package containing the governance module
-	moduleName    string // Name of the Move module, e.g., "dao_governance"
-	adminAddress  string // An admin address if needed for some operations (e.g. initial setup)
-	gasObjectID   string // Default gas object for transactions sent by this service (e.g. proposal execution)
+	suiClient     *SuiClient // Changed from *Client to *SuiClient
+	packageID     string     // ID of the package containing the governance module
+	moduleName    string     // Name of the Move module, e.g., "dao_governance"
+	adminAddress  string     // An admin address if needed for some operations (e.g. initial setup)
+	gasObjectID   string     // Default gas object for transactions sent by this service (e.g. proposal execution)
 }
 
 // NewGovernanceSuiService creates a new GovernanceSuiService.
-func NewGovernanceSuiService(client *Client, packageID, moduleName, adminAddress, gasObjectID string) *GovernanceSuiService {
+func NewGovernanceSuiService(suiClient *SuiClient, packageID, moduleName, adminAddress, gasObjectID string) *GovernanceSuiService {
 	log.Println("Initializing Governance Sui Service...")
-	if client == nil {
-		log.Panic("GovernanceSuiService: Sui client cannot be nil")
+	if suiClient == nil {
+		utils.LogError("GovernanceSuiService: SuiClient cannot be nil") // Changed log.Panic to utils.LogError
+		// Depending on desired behavior, might return nil or an error
+		panic("GovernanceSuiService: SuiClient cannot be nil") // Or handle error more gracefully
 	}
 	if packageID == "" || moduleName == "" { // adminAddress and gasObjectID might be optional for read-only ops
-		log.Panic("GovernanceSuiService: packageID and moduleName must be provided.")
+		utils.LogError("GovernanceSuiService: packageID and moduleName must be provided.")
+		panic("GovernanceSuiService: packageID and moduleName must be provided.") // Or handle error
 	}
 	return &GovernanceSuiService{
-		suiClient:     client,
+		suiClient:     suiClient, // Corrected from client to suiClient
 		packageID:     packageID,
 		moduleName:    moduleName,
 		adminAddress:  adminAddress,
@@ -52,14 +56,15 @@ func (s *GovernanceSuiService) CreateProposal(
 	proposal ProposalData,
 	proposerGasObjectID string, // Gas object owned by the proposer
 	gasBudget uint64,
-) (gjson.Result, error) {
+) (models.TransactionBlockResponse, error) { // Return type changed to models.TransactionBlockResponse
 	functionName := "create_proposal"
-	log.Printf("Player %s preparing to create governance proposal '%s'. Package: %s, Module: %s",
+	utils.LogInfof("GovernanceService: Player %s preparing to create governance proposal '%s'. Package: %s, Module: %s",
 		proposerAddress, proposal.Title, s.packageID, s.moduleName)
 
 	payloadJSON, err := json.Marshal(proposal.ActionPayload)
 	if err != nil {
-		return gjson.Result{}, fmt.Errorf("failed to marshal proposal action payload: %w", err)
+		utils.LogErrorf("GovernanceService: Failed to marshal proposal action payload for '%s': %v", proposal.Title, err)
+		return models.TransactionBlockResponse{}, fmt.Errorf("failed to marshal proposal action payload: %w", err)
 	}
 
 	callArgs := []interface{}{
@@ -72,7 +77,8 @@ func (s *GovernanceSuiService) CreateProposal(
 	}
 	typeArgs := []string{} // If proposal action involves specific types
 
-	txResult, err := s.suiClient.CallMoveFunction(
+	// Directly use suiClient.MoveCall (as CallMoveFunction is deprecated and suiClient is now *SuiClient)
+	txBlockResponse, err := s.suiClient.MoveCall(
 		proposerAddress, // Transaction sender is the proposer
 		s.packageID,
 		s.moduleName,
@@ -84,12 +90,12 @@ func (s *GovernanceSuiService) CreateProposal(
 	)
 
 	if err != nil {
-		log.Printf("Error preparing CreateProposal transaction for '%s': %v", proposal.Title, err)
-		return txResult, err
+		utils.LogErrorf("GovernanceService: Error preparing CreateProposal transaction for '%s': %v", proposal.Title, err)
+		return txBlockResponse, fmt.Errorf("CreateProposal MoveCall failed for %s: %w", proposal.Title, err)
 	}
-	log.Printf("CreateProposal transaction prepared for '%s'. Digest (from unsafe_moveCall): %s",
-		proposal.Title, txResult.Get("digest").String())
-	return txResult, nil
+	utils.LogInfof("GovernanceService: CreateProposal transaction prepared for '%s'. TxBytes: %s",
+		proposal.Title, txBlockResponse.TxBytes)
+	return txBlockResponse, nil
 }
 
 // VoteOnProposal prepares a transaction for a player to vote on a proposal.
@@ -101,9 +107,9 @@ func (s *GovernanceSuiService) VoteOnProposal(
 	voteOption bool, // true for Yes/For, false for No/Against
 	voterGasObjectID string,
 	gasBudget uint64,
-) (gjson.Result, error) {
+) (models.TransactionBlockResponse, error) { // Return type changed to models.TransactionBlockResponse
 	functionName := "cast_vote"
-	log.Printf("Player %s preparing to vote on proposal %s (Option: %t).", voterAddress, proposalObjectID, voteOption)
+	utils.LogInfof("GovernanceService: Player %s preparing to vote on proposal %s (Option: %t).", voterAddress, proposalObjectID, voteOption)
 
 	callArgs := []interface{}{
 		proposalObjectID, // The proposal object itself or its ID
@@ -112,7 +118,7 @@ func (s *GovernanceSuiService) VoteOnProposal(
 	}
 	typeArgs := []string{} // If vote involves specific token types
 
-	txResult, err := s.suiClient.CallMoveFunction(
+	txBlockResponse, err := s.suiClient.MoveCall( // Changed to MoveCall
 		voterAddress, // Voter is the sender
 		s.packageID,
 		s.moduleName,
@@ -123,25 +129,26 @@ func (s *GovernanceSuiService) VoteOnProposal(
 		gasBudget,
 	)
 	if err != nil {
-		log.Printf("Error preparing VoteOnProposal transaction for proposal %s by %s: %v", proposalObjectID, voterAddress, err)
-		return txResult, err
+		utils.LogErrorf("GovernanceService: Error preparing VoteOnProposal transaction for proposal %s by %s: %v", proposalObjectID, voterAddress, err)
+		return txBlockResponse, fmt.Errorf("VoteOnProposal MoveCall failed for %s by %s: %w", proposalObjectID, voterAddress, err)
 	}
-	log.Printf("VoteOnProposal transaction prepared for proposal %s by %s. Digest (from unsafe_moveCall): %s",
-		proposalObjectID, voterAddress, txResult.Get("digest").String())
-	return txResult, nil
+	utils.LogInfof("GovernanceService: VoteOnProposal transaction prepared for proposal %s by %s. TxBytes: %s",
+		proposalObjectID, voterAddress, txBlockResponse.TxBytes)
+	return txBlockResponse, nil
 }
 
 // GetProposalDetails retrieves the current status and details of a governance proposal object.
-func (s *GovernanceSuiService) GetProposalDetails(proposalObjectID string) (gjson.Result, error) {
-	log.Printf("Fetching details for proposal object %s.", proposalObjectID)
+func (s *GovernanceSuiService) GetProposalDetails(proposalObjectID string) (models.SuiObjectResponse, error) { // Return type changed
+	utils.LogInfof("GovernanceService: Fetching details for proposal object %s.", proposalObjectID)
 	// This typically involves fetching a specific Sui object that represents the proposal.
-	objectData, err := s.suiClient.GetObject(proposalObjectID)
+	objectData, err := s.suiClient.GetObject(proposalObjectID) // GetObject already returns models.SuiObjectResponse
 	if err != nil {
-		log.Printf("Error fetching proposal object %s from Sui: %v", proposalObjectID, err)
-		return gjson.Result{}, err
+		utils.LogErrorf("GovernanceService: Error fetching proposal object %s from Sui: %v", proposalObjectID, err)
+		return models.SuiObjectResponse{}, fmt.Errorf("GetObject failed for proposal %s: %w", proposalObjectID, err)
 	}
-	log.Printf("Successfully fetched proposal object %s: %s", proposalObjectID, objectData.Raw)
-	// The actual details are within objectData.Get("data.content.fields") or similar path.
+	utils.LogInfof("GovernanceService: Successfully fetched proposal object %s.", proposalObjectID)
+	// The actual details are within objectData.Data.Content.Fields or similar path if using SuiObjectResponse directly.
+	// If previous code relied on gjson.Result's .Raw or .Get("data.content.fields"), adjustments will be needed in the calling code.
 	return objectData, nil
 }
 
@@ -153,9 +160,9 @@ func (s *GovernanceSuiService) ExecuteProposal(
 	proposalObjectID string,
 	executorGasObjectID string,
 	gasBudget uint64,
-) (gjson.Result, error) {
+) (models.TransactionBlockResponse, error) { // Return type changed to models.TransactionBlockResponse
 	functionName := "execute_proposal"
-	log.Printf("User %s attempting to execute proposal %s.", executorAddress, proposalObjectID)
+	utils.LogInfof("GovernanceService: User %s attempting to execute proposal %s.", executorAddress, proposalObjectID)
 
 	callArgs := []interface{}{
 		proposalObjectID,
@@ -163,7 +170,7 @@ func (s *GovernanceSuiService) ExecuteProposal(
 	}
 	typeArgs := []string{}
 
-	txResult, err := s.suiClient.CallMoveFunction(
+	txBlockResponse, err := s.suiClient.MoveCall( // Changed to MoveCall
 		executorAddress,
 		s.packageID,
 		s.moduleName,
@@ -174,10 +181,10 @@ func (s *GovernanceSuiService) ExecuteProposal(
 		gasBudget,
 	)
 	if err != nil {
-		log.Printf("Error preparing ExecuteProposal transaction for proposal %s by %s: %v", proposalObjectID, executorAddress, err)
-		return txResult, err
+		utils.LogErrorf("GovernanceService: Error preparing ExecuteProposal transaction for proposal %s by %s: %v", proposalObjectID, executorAddress, err)
+		return txBlockResponse, fmt.Errorf("ExecuteProposal MoveCall failed for %s by %s: %w", proposalObjectID, executorAddress, err)
 	}
-	log.Printf("ExecuteProposal transaction prepared for proposal %s by %s. Digest (from unsafe_moveCall): %s",
-		proposalObjectID, executorAddress, txResult.Get("digest").String())
-	return txResult, nil
+	utils.LogInfof("GovernanceService: ExecuteProposal transaction prepared for proposal %s by %s. TxBytes: %s",
+		proposalObjectID, executorAddress, txBlockResponse.TxBytes)
+	return txBlockResponse, nil
 }

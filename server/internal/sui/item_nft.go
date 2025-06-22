@@ -3,9 +3,10 @@ package sui
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log" // Will be replaced by utils.LogX
 
 	"github.com/block-vision/sui-go-sdk/models"
+	"github.com/phuhao00/suigserver/server/internal/utils" // For logging
 )
 
 // ItemNFTService interacts with the Item/Equipment NFT contracts on the Sui blockchain.
@@ -19,18 +20,18 @@ type ItemNFTService struct {
 
 // NewItemNFTService creates a new ItemNFTService.
 // Parameters like packageID, moduleName, adminAddress, adminGasObjID would typically come from config.
-func NewItemNFTService(client *SuiClient, packageID, moduleName, adminAddress, adminGasObjID string) *ItemNFTService {
-	log.Println("Initializing Item NFT Service...")
-	if client == nil {
-		log.Panic("ItemNFTService: Sui client cannot be nil")
+func NewItemNFTService(suiClient *SuiClient, packageID, moduleName, adminAddress, adminGasObjID string) *ItemNFTService {
+	utils.LogInfo("Initializing Item NFT Service...") // Changed to utils
+	if suiClient == nil {
+		utils.LogPanic("ItemNFTService: SuiClient cannot be nil") // Changed to utils
 	}
 	if packageID == "" || moduleName == "" {
-		log.Panic("ItemNFTService: packageID and moduleName must be provided.")
+		utils.LogPanic("ItemNFTService: packageID and moduleName must be provided.") // Changed to utils
 	}
 	// adminAddress and adminGasObjID are needed for minting if it's an admin operation.
 	// For transfers or updates initiated by owners, these specific admin ones might not be used directly in those calls.
 	return &ItemNFTService{
-		suiClient:     client,
+		suiClient:     suiClient, // Corrected: client to suiClient
 		packageID:     packageID,
 		moduleName:    moduleName,
 		adminAddress:  adminAddress,
@@ -42,10 +43,11 @@ func NewItemNFTService(client *SuiClient, packageID, moduleName, adminAddress, a
 // Returns TransactionBlockResponse for subsequent signing and execution by the admin/minter.
 func (s *ItemNFTService) MintItemNFT(itemType string, metadata map[string]interface{}, ownerAddress string, gasBudget uint64) (models.TransactionBlockResponse, error) {
 	functionName := "mint_item_nft" // Assumed Move function name
-	log.Printf("Preparing to mint Item NFT of type %s for %s by admin %s.", itemType, ownerAddress, s.adminAddress)
+	utils.LogInfof("ItemNFTService: Preparing to mint Item NFT of type %s for %s by admin %s.", itemType, ownerAddress, s.adminAddress)
 
 	metadataJSON, err := json.Marshal(metadata)
 	if err != nil {
+		utils.LogErrorf("ItemNFTService: Failed to marshal metadata for minting item type %s: %v", itemType, err)
 		return models.TransactionBlockResponse{}, fmt.Errorf("failed to marshal metadata to JSON: %w", err)
 	}
 
@@ -57,6 +59,7 @@ func (s *ItemNFTService) MintItemNFT(itemType string, metadata map[string]interf
 	typeArgs := []string{} // If mint function is generic
 
 	if s.adminAddress == "" || s.adminGasObjID == "" {
+		utils.LogError("ItemNFTService: adminAddress and adminGasObjID must be configured for minting")
 		return models.TransactionBlockResponse{}, fmt.Errorf("adminAddress and adminGasObjID must be configured for minting")
 	}
 
@@ -72,22 +75,91 @@ func (s *ItemNFTService) MintItemNFT(itemType string, metadata map[string]interf
 	)
 
 	if err != nil {
-		log.Printf("Error preparing MintItemNFT transaction (Type: %s for %s): %v", itemType, ownerAddress, err)
-		return models.TransactionBlockResponse{}, err
+		utils.LogErrorf("ItemNFTService: Error preparing MintItemNFT transaction (Type: %s for %s): %v", itemType, ownerAddress, err)
+		return models.TransactionBlockResponse{}, fmt.Errorf("MoveCall failed for MintItemNFT: %w", err)
 	}
-	log.Printf("MintItemNFT transaction prepared (Type: %s for %s). TxBytes: %s", itemType, ownerAddress, txBlockResponse.TxBytes)
+	utils.LogInfof("ItemNFTService: MintItemNFT transaction prepared (Type: %s for %s). TxBytes: %s", itemType, ownerAddress, txBlockResponse.TxBytes)
 	return txBlockResponse, nil
+}
+
+// MintItemNFTAndExecute is an EXAMPLE function demonstrating the full flow:
+// 1. Prepare Transaction (using MintItemNFT)
+// 2. Sign Transaction (using conceptual server-side SignTransactionBytesWithServerKey)
+// 3. Execute Transaction
+// It requires serverPrivateKeyHex to be configured.
+// WARNING: This is for demonstration. Private key management needs to be secure in production.
+func (s *ItemNFTService) MintItemNFTAndExecute(
+	itemType string,
+	metadata map[string]interface{},
+	ownerAddress string,
+	gasBudget uint64,
+	serverPrivateKeyHex string, // Server's private key for signing. HANDLE WITH EXTREME CARE.
+) (models.SuiExecuteTransactionBlockResponse, error) {
+	utils.LogInfof("ItemNFTService: Attempting to mint and execute Item NFT of type %s for %s", itemType, ownerAddress)
+
+	// 1. Prepare the transaction
+	txBlockResponse, err := s.MintItemNFT(itemType, metadata, ownerAddress, gasBudget)
+	if err != nil {
+		// MintItemNFT already logs the specific error
+		return models.SuiExecuteTransactionBlockResponse{}, fmt.Errorf("failed to prepare MintItemNFT transaction: %w", err)
+	}
+
+	if txBlockResponse.TxBytes == "" {
+		utils.LogError("ItemNFTService: Prepared transaction resulted in empty TxBytes.")
+		return models.SuiExecuteTransactionBlockResponse{}, fmt.Errorf("prepared transaction resulted in empty TxBytes")
+	}
+	utils.LogDebugf("ItemNFTService: TxBytes for signing: %s", txBlockResponse.TxBytes)
+
+	// 2. Sign the transaction (using conceptual server-side signing)
+	//    In a real scenario, ensure serverPrivateKeyHex is securely managed.
+	signature, err := SignTransactionBytesWithServerKey(txBlockResponse.TxBytes, serverPrivateKeyHex)
+	if err != nil {
+		utils.LogErrorf("ItemNFTService: Failed to sign transaction for MintItemNFT (Type: %s): %v", itemType, err)
+		return models.SuiExecuteTransactionBlockResponse{}, fmt.Errorf("failed to sign transaction: %w", err)
+	}
+	utils.LogDebugf("ItemNFTService: Conceptual signature obtained: %s", signature)
+
+	// 3. Execute the transaction
+	utils.LogInfo("ItemNFTService: Executing transaction...")
+	executeResponse, err := s.suiClient.ExecuteTransactionBlock(txBlockResponse.TxBytes, []string{signature})
+	if err != nil {
+		utils.LogErrorf("ItemNFTService: Failed to execute MintItemNFT transaction (Type: %s): %v", itemType, err)
+		// Log more details from executeResponse if available, e.g., executeResponse.Error
+		return models.SuiExecuteTransactionBlockResponse{}, fmt.Errorf("failed to execute transaction: %w. Raw Error: %s", err, executeResponse.Error)
+	}
+
+	// Check for errors in execution effects
+	// The sui-go-sdk's ExecuteTransactionBlock already returns an error if the RPC call itself failed.
+	// The `executeResponse.Effects.Data.V1.Status.Error` provides on-chain execution error details.
+	if executeResponse.Effects != nil && executeResponse.Effects.Data.V1.Status.Error != "" {
+		errMsg := fmt.Sprintf("transaction execution failed with on-chain error: %s", executeResponse.Effects.Data.V1.Status.Error)
+		utils.LogError("ItemNFTService: " + errMsg)
+		// Optionally, you can inspect executeResponse.Effects.Data.V1.Status.Status == "failure"
+		return executeResponse, fmt.Errorf(errMsg) // Return the response along with the error
+	}
+
+	utils.LogInfof("ItemNFTService: MintItemNFT transaction executed successfully (Type: %s for %s). Digest: %s",
+		itemType, ownerAddress, executeResponse.Digest)
+
+	// Example: Log created objects
+	if executeResponse.Effects != nil {
+		for _, created := range executeResponse.Effects.Data.V1.Created {
+			utils.LogInfof("ItemNFTService: Created object: ID %s, Owner %s", created.Reference.ObjectId, created.Owner)
+		}
+	}
+
+	return executeResponse, nil
 }
 
 // GetItemNFT retrieves details of an Item NFT by its object ID.
 func (s *ItemNFTService) GetItemNFT(nftID string) (models.SuiObjectResponse, error) {
-	log.Printf("Fetching Item NFT with ID %s.", nftID)
+	utils.LogInfof("ItemNFTService: Fetching Item NFT with ID %s.", nftID) // Changed log to utils
 	objectData, err := s.suiClient.GetObject(nftID)
 	if err != nil {
-		log.Printf("Error fetching Item NFT object %s from Sui: %v", nftID, err)
-		return models.SuiObjectResponse{}, err
+		utils.LogErrorf("ItemNFTService: Error fetching Item NFT object %s from Sui: %v", nftID, err) // Changed log to utils
+		return models.SuiObjectResponse{}, fmt.Errorf("GetObject failed for ItemNFT %s: %w", nftID, err)
 	}
-	log.Printf("Successfully fetched Item NFT object %s.", nftID)
+	utils.LogInfof("ItemNFTService: Successfully fetched Item NFT object %s.", nftID) // Changed log to utils
 	return objectData, nil
 }
 
@@ -96,7 +168,7 @@ func (s *ItemNFTService) GetItemNFT(nftID string) (models.SuiObjectResponse, err
 // Returns TransactionBlockResponse for subsequent signing and execution.
 func (s *ItemNFTService) TransferItemNFT(nftID, fromAddress, toAddress, gasObjectID string, gasBudget uint64) (models.TransactionBlockResponse, error) {
 	functionName := "transfer_item_nft" // Assumed Move function, often this is a generic `sui::transfer::public_transfer`
-	log.Printf("Preparing to transfer Item NFT %s from %s to %s.", nftID, fromAddress, toAddress)
+	utils.LogInfof("ItemNFTService: Preparing to transfer Item NFT %s from %s to %s. GasObject: %s", nftID, fromAddress, toAddress, gasObjectID)
 
 	// For public_transfer, the arguments are typically the object itself and the recipient address.
 	// The object being transferred (nftID) is usually the first argument to transfer functions or handled by PTB.
@@ -122,10 +194,10 @@ func (s *ItemNFTService) TransferItemNFT(nftID, fromAddress, toAddress, gasObjec
 	// than having a dedicated `transfer_item_nft` in the item module, unless there are specific logics.
 
 	if err != nil {
-		log.Printf("Error preparing TransferItemNFT transaction (%s from %s to %s): %v", nftID, fromAddress, toAddress, err)
-		return models.TransactionBlockResponse{}, err
+		utils.LogErrorf("ItemNFTService: Error preparing TransferItemNFT transaction (%s from %s to %s): %v", nftID, fromAddress, toAddress, err)
+		return models.TransactionBlockResponse{}, fmt.Errorf("MoveCall failed for TransferItemNFT: %w", err)
 	}
-	log.Printf("TransferItemNFT transaction prepared (%s from %s to %s). TxBytes: %s", nftID, fromAddress, toAddress, txBlockResponse.TxBytes)
+	utils.LogInfof("ItemNFTService: TransferItemNFT transaction prepared (%s from %s to %s). TxBytes: %s", nftID, fromAddress, toAddress, txBlockResponse.TxBytes)
 	return txBlockResponse, nil
 }
 
@@ -134,10 +206,11 @@ func (s *ItemNFTService) TransferItemNFT(nftID, fromAddress, toAddress, gasObjec
 // Returns TransactionBlockResponse for subsequent signing and execution.
 func (s *ItemNFTService) UpdateItemNFT(nftID string, ownerAddress string, updates map[string]interface{}, gasObjectID string, gasBudget uint64) (models.TransactionBlockResponse, error) {
 	functionName := "update_item_nft" // Assumed Move function name
-	log.Printf("Preparing to update Item NFT %s by owner %s with data %v.", nftID, ownerAddress, updates)
+	utils.LogInfof("ItemNFTService: Preparing to update Item NFT %s by owner %s with data %v. GasObject: %s", nftID, ownerAddress, updates, gasObjectID)
 
 	updatesJSON, err := json.Marshal(updates)
 	if err != nil {
+		utils.LogErrorf("ItemNFTService: Failed to marshal updates for NFT %s: %v", nftID, err)
 		return models.TransactionBlockResponse{}, fmt.Errorf("failed to marshal updates to JSON: %w", err)
 	}
 
@@ -160,9 +233,9 @@ func (s *ItemNFTService) UpdateItemNFT(nftID string, ownerAddress string, update
 	)
 
 	if err != nil {
-		log.Printf("Error preparing UpdateItemNFT transaction for %s: %v", nftID, err)
-		return models.TransactionBlockResponse{}, err
+		utils.LogErrorf("ItemNFTService: Error preparing UpdateItemNFT transaction for %s: %v", nftID, err)
+		return models.TransactionBlockResponse{}, fmt.Errorf("MoveCall failed for UpdateItemNFT: %w", err)
 	}
-	log.Printf("UpdateItemNFT transaction prepared for %s. TxBytes: %s", nftID, txBlockResponse.TxBytes)
+	utils.LogInfof("ItemNFTService: UpdateItemNFT transaction prepared for %s. TxBytes: %s", nftID, txBlockResponse.TxBytes)
 	return txBlockResponse, nil
 }

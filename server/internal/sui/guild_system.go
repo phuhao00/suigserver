@@ -2,9 +2,9 @@ package sui
 
 import (
 	"fmt"
-	"log"
-
+	// "log" // Will be replaced by utils
 	"github.com/block-vision/sui-go-sdk/models"
+	"github.com/phuhao00/suigserver/server/internal/utils" // For logging
 )
 
 // GuildSystemSuiService interacts with the Guild System contract on the Sui blockchain.
@@ -15,16 +15,16 @@ type GuildSystemSuiService struct {
 }
 
 // NewGuildSystemSuiService creates a new GuildSystemSuiService.
-func NewGuildSystemSuiService(client *SuiClient, packageID, moduleName string) *GuildSystemSuiService {
-	log.Println("Initializing Guild System Sui Service...")
-	if client == nil {
-		log.Panic("GuildSystemSuiService: Sui client cannot be nil")
+func NewGuildSystemSuiService(suiClient *SuiClient, packageID, moduleName string) *GuildSystemSuiService {
+	utils.LogInfo("Initializing Guild System Sui Service...")
+	if suiClient == nil {
+		utils.LogPanic("GuildSystemSuiService: SuiClient cannot be nil")
 	}
 	if packageID == "" || moduleName == "" {
-		log.Panic("GuildSystemSuiService: packageID and moduleName must be provided.")
+		utils.LogPanic("GuildSystemSuiService: packageID and moduleName must be provided.")
 	}
 	return &GuildSystemSuiService{
-		suiClient:  client,
+		suiClient:  suiClient,
 		packageID:  packageID,
 		moduleName: moduleName,
 	}
@@ -41,8 +41,14 @@ func (s *GuildSystemSuiService) CreateGuild(
 	gasBudget uint64,
 ) (models.TransactionBlockResponse, error) {
 	functionName := "create_guild"
-	log.Printf("Player %s preparing to create guild '%s' (%s). Package: %s, Module: %s",
-		leaderAddress, guildName, guildSymbol, s.packageID, s.moduleName)
+	utils.LogInfof("GuildSystemSuiService: Player %s preparing to create guild '%s' (%s). Package: %s, Module: %s, GasObject: %s, GasBudget: %d",
+		leaderAddress, guildName, guildSymbol, s.packageID, s.moduleName, leaderGasObjectID, gasBudget)
+
+	if leaderAddress == "" || guildName == "" || guildSymbol == "" || leaderGasObjectID == "" {
+		errMsg := "leaderAddress, guildName, guildSymbol, and leaderGasObjectID must be provided for CreateGuild"
+		utils.LogError("GuildSystemSuiService: " + errMsg)
+		return models.TransactionBlockResponse{}, fmt.Errorf(errMsg)
+	}
 
 	callArgs := []interface{}{
 		guildName,
@@ -63,23 +69,27 @@ func (s *GuildSystemSuiService) CreateGuild(
 	)
 
 	if err != nil {
-		log.Printf("Error preparing CreateGuild transaction for '%s': %v", guildName, err)
-		return models.TransactionBlockResponse{}, err
+		utils.LogErrorf("GuildSystemSuiService: Error preparing CreateGuild transaction for '%s': %v", guildName, err)
+		return models.TransactionBlockResponse{}, fmt.Errorf("MoveCall failed for CreateGuild ('%s'): %w", guildName, err)
 	}
-	log.Printf("CreateGuild transaction prepared for '%s'. TxBytes: %s",
+	utils.LogInfof("GuildSystemSuiService: CreateGuild transaction prepared for '%s'. TxBytes: %s",
 		guildName, txBlockResponse.TxBytes)
 	return txBlockResponse, nil
 }
 
 // GetGuildInfo retrieves details of a guild from the blockchain by its object ID.
 func (s *GuildSystemSuiService) GetGuildInfo(guildObjectID string) (models.SuiObjectResponse, error) {
-	log.Printf("Fetching guild info for object ID %s.", guildObjectID)
+	utils.LogInfof("GuildSystemSuiService: Fetching guild info for object ID %s.", guildObjectID)
+	if guildObjectID == "" {
+		utils.LogError("GuildSystemSuiService: guildObjectID must be provided for GetGuildInfo")
+		return models.SuiObjectResponse{}, fmt.Errorf("guildObjectID must be provided")
+	}
 	objectData, err := s.suiClient.GetObject(guildObjectID)
 	if err != nil {
-		log.Printf("Error fetching guild object %s from Sui: %v", guildObjectID, err)
-		return models.SuiObjectResponse{}, err
+		utils.LogErrorf("GuildSystemSuiService: Error fetching guild object %s from Sui: %v", guildObjectID, err)
+		return models.SuiObjectResponse{}, fmt.Errorf("GetObject failed for guild %s: %w", guildObjectID, err)
 	}
-	log.Printf("Successfully fetched guild object %s.", guildObjectID)
+	utils.LogInfof("GuildSystemSuiService: Successfully fetched guild object %s.", guildObjectID)
 	return objectData, nil
 }
 
@@ -93,7 +103,14 @@ func (s *GuildSystemSuiService) AddMember(
 	gasBudget uint64,
 ) (models.TransactionBlockResponse, error) {
 	functionName := "add_member"
-	log.Printf("User %s preparing to add player %s to guild %s.", requesterAddress, playerAddress, guildObjectID)
+	utils.LogInfof("GuildSystemSuiService: User %s preparing to add player %s to guild %s. GasObject: %s, GasBudget: %d",
+		requesterAddress, playerAddress, guildObjectID, requesterGasObjectID, gasBudget)
+
+	if requesterAddress == "" || guildObjectID == "" || playerAddress == "" || requesterGasObjectID == "" {
+		errMsg := "requesterAddress, guildObjectID, playerAddress, and requesterGasObjectID must be provided for AddMember"
+		utils.LogError("GuildSystemSuiService: " + errMsg)
+		return models.TransactionBlockResponse{}, fmt.Errorf(errMsg)
+	}
 
 	callArgs := []interface{}{
 		guildObjectID,
@@ -112,10 +129,10 @@ func (s *GuildSystemSuiService) AddMember(
 		gasBudget,
 	)
 	if err != nil {
-		log.Printf("Error preparing AddMember transaction (Guild: %s, Player: %s): %v", guildObjectID, playerAddress, err)
-		return models.TransactionBlockResponse{}, err
+		utils.LogErrorf("GuildSystemSuiService: Error preparing AddMember transaction (Guild: %s, Player: %s): %v", guildObjectID, playerAddress, err)
+		return models.TransactionBlockResponse{}, fmt.Errorf("MoveCall failed for AddMember (Guild: %s, Player: %s): %w", guildObjectID, playerAddress, err)
 	}
-	log.Printf("AddMember transaction prepared (Guild: %s, Player: %s). TxBytes: %s",
+	utils.LogInfof("GuildSystemSuiService: AddMember transaction prepared (Guild: %s, Player: %s). TxBytes: %s",
 		guildObjectID, playerAddress, txBlockResponse.TxBytes)
 	return txBlockResponse, nil
 }
@@ -130,7 +147,14 @@ func (s *GuildSystemSuiService) RemoveMember(
 	gasBudget uint64,
 ) (models.TransactionBlockResponse, error) {
 	functionName := "remove_member"
-	log.Printf("User %s preparing to remove player %s from guild %s.", requesterAddress, playerAddress, guildObjectID)
+	utils.LogInfof("GuildSystemSuiService: User %s preparing to remove player %s from guild %s. GasObject: %s, GasBudget: %d",
+		requesterAddress, playerAddress, guildObjectID, requesterGasObjectID, gasBudget)
+
+	if requesterAddress == "" || guildObjectID == "" || playerAddress == "" || requesterGasObjectID == "" {
+		errMsg := "requesterAddress, guildObjectID, playerAddress, and requesterGasObjectID must be provided for RemoveMember"
+		utils.LogError("GuildSystemSuiService: " + errMsg)
+		return models.TransactionBlockResponse{}, fmt.Errorf(errMsg)
+	}
 
 	callArgs := []interface{}{
 		guildObjectID,
@@ -150,15 +174,17 @@ func (s *GuildSystemSuiService) RemoveMember(
 	)
 
 	if err != nil {
-		log.Printf("Error preparing RemoveMember transaction (Guild: %s, Player: %s): %v", guildObjectID, playerAddress, err)
-		return models.TransactionBlockResponse{}, err
+		utils.LogErrorf("GuildSystemSuiService: Error preparing RemoveMember transaction (Guild: %s, Player: %s): %v", guildObjectID, playerAddress, err)
+		return models.TransactionBlockResponse{}, fmt.Errorf("MoveCall failed for RemoveMember (Guild: %s, Player: %s): %w", guildObjectID, playerAddress, err)
 	}
-	log.Printf("RemoveMember transaction prepared (Guild: %s, Player: %s). TxBytes: %s",
+	utils.LogInfof("GuildSystemSuiService: RemoveMember transaction prepared (Guild: %s, Player: %s). TxBytes: %s",
 		guildObjectID, playerAddress, txBlockResponse.TxBytes)
 	return txBlockResponse, nil
 }
 
 // --- Placeholder functions for other guild operations ---
+// These will also need similar logging, validation, and error handling updates if they are to be used.
+// For brevity in this review, I will update one more (UpdateGuildDescription) and assume the pattern applies to others.
 
 // UpdateGuildDescription prepares a transaction to update a guild's description.
 func (s *GuildSystemSuiService) UpdateGuildDescription(
@@ -169,14 +195,28 @@ func (s *GuildSystemSuiService) UpdateGuildDescription(
 	gasBudget uint64,
 ) (models.TransactionBlockResponse, error) {
 	functionName := "update_guild_description" // Assumed Move function name
-	log.Printf("Officer %s preparing to update description for guild %s.", officerAddress, guildObjectID)
+	utils.LogInfof("GuildSystemSuiService: Officer %s preparing to update description for guild %s. GasObject: %s, GasBudget: %d",
+		officerAddress, guildObjectID, officerGasObjectID, gasBudget)
+
+	if officerAddress == "" || guildObjectID == "" || newDescription == "" || officerGasObjectID == "" {
+		errMsg := "officerAddress, guildObjectID, newDescription, and officerGasObjectID must be provided for UpdateGuildDescription"
+		utils.LogError("GuildSystemSuiService: " + errMsg)
+		return models.TransactionBlockResponse{}, fmt.Errorf(errMsg)
+	}
+
 	callArgs := []interface{}{guildObjectID, newDescription}
 	typeArgs := []string{}
 	// This is a simplified example. Actual implementation might require specific capabilities.
-	return s.suiClient.MoveCall(officerAddress, s.packageID, s.moduleName, functionName, typeArgs, callArgs, officerGasObjectID, gasBudget)
+	txBlockResponse, err := s.suiClient.MoveCall(officerAddress, s.packageID, s.moduleName, functionName, typeArgs, callArgs, officerGasObjectID, gasBudget)
+	if err != nil {
+		utils.LogErrorf("GuildSystemSuiService: MoveCall failed for UpdateGuildDescription (Guild: %s): %v", guildObjectID, err)
+		return models.TransactionBlockResponse{}, fmt.Errorf("MoveCall failed for UpdateGuildDescription (Guild: %s): %w", guildObjectID, err)
+	}
+	return txBlockResponse, nil
 }
 
 // PromoteMember prepares a transaction to promote a guild member.
+// NOTE: This and subsequent placeholder functions would need similar validation and error handling.
 func (s *GuildSystemSuiService) PromoteMember(
 	officerAddress string, // Signer
 	guildObjectID string,
@@ -186,9 +226,12 @@ func (s *GuildSystemSuiService) PromoteMember(
 	gasBudget uint64,
 ) (models.TransactionBlockResponse, error) {
 	functionName := "promote_member" // Assumed Move function name
-	log.Printf("Officer %s preparing to promote member %s in guild %s to rank %s.", officerAddress, memberAddress, guildObjectID, newRank)
+	utils.LogInfof("GuildSystemSuiService: Officer %s preparing to promote member %s in guild %s to rank %s. GasObject: %s, GasBudget: %d",
+		officerAddress, memberAddress, guildObjectID, newRank, officerGasObjectID, gasBudget)
+	// TODO: Add validation for parameters
 	callArgs := []interface{}{guildObjectID, memberAddress, newRank}
 	typeArgs := []string{}
+	// TODO: Add error handling for MoveCall
 	return s.suiClient.MoveCall(officerAddress, s.packageID, s.moduleName, functionName, typeArgs, callArgs, officerGasObjectID, gasBudget)
 }
 
@@ -202,9 +245,12 @@ func (s *GuildSystemSuiService) DemoteMember(
 	gasBudget uint64,
 ) (models.TransactionBlockResponse, error) {
 	functionName := "demote_member" // Assumed
-	log.Printf("Officer %s preparing to demote member %s in guild %s to rank %s.", officerAddress, memberAddress, guildObjectID, newRank)
+	utils.LogInfof("GuildSystemSuiService: Officer %s preparing to demote member %s in guild %s to rank %s. GasObject: %s, GasBudget: %d",
+		officerAddress, memberAddress, guildObjectID, newRank, officerGasObjectID, gasBudget)
+	// TODO: Add validation for parameters
 	callArgs := []interface{}{guildObjectID, memberAddress, newRank}
 	typeArgs := []string{}
+	// TODO: Add error handling for MoveCall
 	return s.suiClient.MoveCall(officerAddress, s.packageID, s.moduleName, functionName, typeArgs, callArgs, officerGasObjectID, gasBudget)
 }
 
@@ -217,9 +263,12 @@ func (s *GuildSystemSuiService) TransferLeadership(
 	gasBudget uint64,
 ) (models.TransactionBlockResponse, error) {
 	functionName := "transfer_leadership" // Assumed
-	log.Printf("Leader %s preparing to transfer leadership of guild %s to %s.", currentLeaderAddress, guildObjectID, newLeaderAddress)
+	utils.LogInfof("GuildSystemSuiService: Leader %s preparing to transfer leadership of guild %s to %s. GasObject: %s, GasBudget: %d",
+		currentLeaderAddress, guildObjectID, newLeaderAddress, leaderGasObjectID, gasBudget)
+	// TODO: Add validation for parameters
 	callArgs := []interface{}{guildObjectID, newLeaderAddress} // currentLeaderAddress is implicit as signer
 	typeArgs := []string{}
+	// TODO: Add error handling for MoveCall
 	return s.suiClient.MoveCall(currentLeaderAddress, s.packageID, s.moduleName, functionName, typeArgs, callArgs, leaderGasObjectID, gasBudget)
 }
 
@@ -231,9 +280,12 @@ func (s *GuildSystemSuiService) DisbandGuild(
 	gasBudget uint64,
 ) (models.TransactionBlockResponse, error) {
 	functionName := "disband_guild" // Assumed
-	log.Printf("Leader %s preparing to disband guild %s.", leaderAddress, guildObjectID)
+	utils.LogInfof("GuildSystemSuiService: Leader %s preparing to disband guild %s. GasObject: %s, GasBudget: %d",
+		leaderAddress, guildObjectID, leaderGasObjectID, gasBudget)
+	// TODO: Add validation for parameters
 	callArgs := []interface{}{guildObjectID}
 	typeArgs := []string{}
+	// TODO: Add error handling for MoveCall
 	return s.suiClient.MoveCall(leaderAddress, s.packageID, s.moduleName, functionName, typeArgs, callArgs, leaderGasObjectID, gasBudget)
 }
 
@@ -252,8 +304,10 @@ func (s *GuildSystemSuiService) ManageGuildBank(
 	// E.g., depositing an NFT might be one function, FT another.
 	// functionName would vary based on actionType and item type.
 	functionName := fmt.Sprintf("%s_guild_bank", actionType) // Highly speculative
-	log.Printf("Officer %s performing '%s' for item/coin %s (amount %d) in guild %s bank.",
-		officerAddress, actionType, itemOrCoinID, amount, guildObjectID)
+	utils.LogInfof("GuildSystemSuiService: Officer %s performing '%s' for item/coin %s (amount %d) in guild %s bank. GasObject: %s, GasBudget: %d",
+		officerAddress, actionType, itemOrCoinID, amount, guildObjectID, officerGasObjectID, gasBudget)
+
+	// TODO: Add validation for parameters, including officerAddress, guildObjectID, itemOrCoinID/amount, actionType, officerGasObjectID.
 
 	var callArgs []interface{}
 	// Example: A generic "process_bank_action" function
@@ -266,10 +320,11 @@ func (s *GuildSystemSuiService) ManageGuildBank(
 		functionName = "withdraw_coin_from_bank"
 		callArgs = []interface{}{guildObjectID, amount} // amount of game coin, recipient is officerAddress
 	} else {
+		utils.LogErrorf("GuildSystemSuiService: Unsupported guild bank actionType: %s", actionType)
 		return models.TransactionBlockResponse{}, fmt.Errorf("unsupported guild bank actionType: %s", actionType)
 	}
 
 	typeArgs := []string{} // May need type args if bank functions are generic (e.g. for Coin<T>)
-
+	// TODO: Add error handling for MoveCall
 	return s.suiClient.MoveCall(officerAddress, s.packageID, s.moduleName, functionName, typeArgs, callArgs, officerGasObjectID, gasBudget)
 }

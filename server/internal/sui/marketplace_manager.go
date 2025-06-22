@@ -2,14 +2,18 @@ package sui
 
 import (
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
+	"github.com/block-vision/sui-go-sdk/models" // Added for TransactionBlockResponse
 	"github.com/phuhao00/suigserver/server/configs"
+	"github.com/phuhao00/suigserver/server/internal/utils" // For logging
 )
 
-// MarketplaceServiceManager manages the marketplace service with advanced features
+// MarketplaceServiceManager manages the marketplace service, adding features like caching,
+// rate limiting, and potentially orchestrating transaction signing and execution.
+// For now, it primarily adapts the new MarketSuiService interface.
+type MarketplaceServiceManager struct {
 type MarketplaceServiceManager struct {
 	marketService *MarketSuiService
 	client        *SuiClient
@@ -58,7 +62,7 @@ func NewMarketplaceServiceManager(config *configs.MarketplaceConfig) (*Marketpla
 		go manager.cacheCleanupRoutine()
 	}
 
-	log.Println("Marketplace Service Manager initialized successfully")
+	utils.LogInfo("Marketplace Service Manager initialized successfully")
 	return manager, nil
 }
 
@@ -156,73 +160,123 @@ func (m *MarketplaceServiceManager) checkRateLimit(userID string) bool {
 	return true
 }
 
-// ListNFTForSale lists an NFT for sale with rate limiting and caching
-func (m *MarketplaceServiceManager) ListNFTForSale(sellerAddress, nftID, nftType string, price uint64, currency, description string, durationHours *uint64) (string, error) {
-	// Check rate limit
+// PrepareListNFTForSale prepares a transaction to list an NFT for sale.
+// This manager method handles rate limiting, validation, and then calls the underlying service.
+// It returns the TransactionBlockResponse which contains TxBytes for signing.
+// The actual signing and execution must be handled by the caller or a subsequent step.
+// gasObjectID must be for a gas coin owned by sellerAddress.
+func (m *MarketplaceServiceManager) PrepareListNFTForSale(
+	sellerAddress string,
+	nftID string,
+	nftType string, // Fully qualified type of the NFT, e.g., "0xPACKAGE::module::NftName"
+	price uint64,
+	currencyCoinType string, // Fully qualified type of the coin for pricing, e.g., "0x2::sui::SUI"
+	description string,
+	durationHours *uint64,
+	gasObjectID string, // Specific gas object ID for this transaction
+) (models.TransactionBlockResponse, error) {
 	if !m.checkRateLimit(sellerAddress) {
-		return "", fmt.Errorf("rate limit exceeded for user %s", sellerAddress)
+		return models.TransactionBlockResponse{}, fmt.Errorf("rate limit exceeded for user %s", sellerAddress)
 	}
 
-	// Validate duration
 	if durationHours != nil && *durationHours > m.config.MaxListingDuration {
-		return "", fmt.Errorf("listing duration exceeds maximum allowed (%d hours)", m.config.MaxListingDuration)
+		return models.TransactionBlockResponse{}, fmt.Errorf("listing duration exceeds maximum allowed (%d hours)", m.config.MaxListingDuration)
+	}
+	if gasObjectID == "" {
+		return models.TransactionBlockResponse{}, fmt.Errorf("gasObjectID is required for PrepareListNFTForSale")
 	}
 
-	// Call marketplace service
-	listingID, err := m.marketService.ListNFTForSale(sellerAddress, nftID, nftType, price, currency, description, durationHours)
+	// Call marketplace service - note the new signature
+	txBlockResp, err := m.marketService.ListNFTForSale(
+		sellerAddress, nftID, nftType, price, currencyCoinType, description, durationHours,
+		gasObjectID, m.config.DefaultGasBudget, // Using default gas budget from config
+	)
 	if err != nil {
-		return "", err
+		return models.TransactionBlockResponse{}, err // Error already logged by service
 	}
 
-	// Invalidate cache for listings
-	m.invalidateListingsCache()
+	// Invalidate relevant caches if the operation implies a state change that affects cached data.
+	// For preparing a transaction, this might be premature. Caches should be invalidated *after*
+	// successful execution of the transaction.
+	// For now, we'll assume invalidation happens elsewhere post-execution.
+	// m.invalidateListingsCache() // Potentially move this to an "after execution success" handler
 
-	return listingID, nil
+	return txBlockResp, nil
 }
 
-// PurchaseNFT purchases an NFT with rate limiting
-func (m *MarketplaceServiceManager) PurchaseNFT(buyerAddress, nftID, paymentCoinID string) (*PurchaseResult, error) {
-	// Check rate limit
+// PreparePurchaseNFT prepares a transaction to purchase an NFT.
+// Returns TransactionBlockResponse containing TxBytes for signing by the buyer.
+// buyerGasObjectID must be for a gas coin owned by buyerAddress.
+// paymentCoinID is the specific Coin object used for payment.
+func (m *MarketplaceServiceManager) PreparePurchaseNFT(
+	buyerAddress string,
+	listingObjectID string,
+	paymentCoinID string,
+	nftType string,     // Fully qualified type of the NFT being purchased
+	coinType string,    // Fully qualified type of the coin being used for payment
+	buyerGasObjectID string,
+) (models.TransactionBlockResponse, error) {
 	if !m.checkRateLimit(buyerAddress) {
-		return nil, fmt.Errorf("rate limit exceeded for user %s", buyerAddress)
+		return models.TransactionBlockResponse{}, fmt.Errorf("rate limit exceeded for user %s", buyerAddress)
+	}
+	if buyerGasObjectID == "" || paymentCoinID == "" || listingObjectID == "" {
+		return models.TransactionBlockResponse{}, fmt.Errorf("buyerGasObjectID, paymentCoinID, and listingObjectID are required")
 	}
 
-	// Call marketplace service
-	result, err := m.marketService.PurchaseNFT(buyerAddress, nftID, paymentCoinID)
+	txBlockResp, err := m.marketService.PurchaseNFT(
+		buyerAddress, listingObjectID, paymentCoinID,
+		nftType, coinType, // Pass NFT and Coin types for generics
+		buyerGasObjectID, m.config.DefaultGasBudget,
+	)
 	if err != nil {
-		return nil, err
+		return models.TransactionBlockResponse{}, err
 	}
 
-	// Invalidate cache
-	m.invalidateListingsCache()
-	m.invalidateNFTCache(nftID)
+	// Invalidation would happen after successful execution.
+	// m.invalidateListingsCache()
+	// m.invalidateNFTCache(nftID) // Need the actual NFT ID here, which might be part of listingObjectID or fetched.
 
-	return result, nil
+	return txBlockResp, nil
 }
 
-// CancelListing cancels a listing with rate limiting
-func (m *MarketplaceServiceManager) CancelListing(sellerAddress, nftID string) error {
-	// Check rate limit
+// PrepareCancelListing prepares a transaction to cancel an NFT listing.
+// Returns TransactionBlockResponse containing TxBytes for signing by the seller.
+// sellerGasObjectID must be for a gas coin owned by sellerAddress.
+func (m *MarketplaceServiceManager) PrepareCancelListing(
+	sellerAddress string,
+	listingObjectID string,
+	nftType string, // The type of NFT that was listed
+	coinType string, // The type of Coin that was expected
+	sellerGasObjectID string,
+) (models.TransactionBlockResponse, error) {
 	if !m.checkRateLimit(sellerAddress) {
-		return fmt.Errorf("rate limit exceeded for user %s", sellerAddress)
+		return models.TransactionBlockResponse{}, fmt.Errorf("rate limit exceeded for user %s", sellerAddress)
+	}
+	if sellerGasObjectID == "" || listingObjectID == "" {
+		return models.TransactionBlockResponse{}, fmt.Errorf("sellerGasObjectID and listingObjectID are required")
 	}
 
-	// Call marketplace service
-	err := m.marketService.CancelListing(sellerAddress, nftID)
+	txBlockResp, err := m.marketService.CancelListing(
+		sellerAddress, listingObjectID,
+		nftType, coinType, // Pass NFT and Coin types for generics
+		sellerGasObjectID, m.config.DefaultGasBudget,
+	)
 	if err != nil {
-		return err
+		return models.TransactionBlockResponse{}, err
 	}
 
-	// Invalidate cache
-	m.invalidateListingsCache()
-	m.invalidateNFTCache(nftID)
+	// Invalidation would happen after successful execution.
+	// m.invalidateListingsCache()
+	// m.invalidateNFTCache(nftID) // Need actual NFT ID
 
-	return nil
+	return txBlockResp, nil
 }
 
-// GetListings retrieves listings with caching
-func (m *MarketplaceServiceManager) GetListings(limit int, cursor *string) ([]ListingInfo, *string, error) {
-	cacheKey := fmt.Sprintf("listings_%d_%v", limit, cursor)
+// GetListings retrieves listings with caching. The eventType is the fully qualified
+// type of the event that creates listings (e.g., "0xPKG::market::ListingCreated").
+func (m *MarketplaceServiceManager) GetListings(eventType string, limit int, cursor *string) ([]ListingInfo, *string, error) {
+	// Note: Caching key might need to include eventType if it can vary for "listings"
+	cacheKey := fmt.Sprintf("listings_%s_%d_%v", eventType, limit, cursor)
 
 	// Try cache first
 	if cached, found := m.getFromCache(cacheKey); found {
@@ -235,7 +289,8 @@ func (m *MarketplaceServiceManager) GetListings(limit int, cursor *string) ([]Li
 	}
 
 	// Fetch from blockchain
-	listings, nextCursor, err := m.marketService.GetListings(limit, cursor)
+	// Ensure marketService.GetListings is called with eventType
+	listings, nextCursor, err := m.marketService.GetListings(eventType, limit, cursor)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -287,7 +342,9 @@ func (m *MarketplaceServiceManager) GetPlayerNFTs(playerAddress string) ([]map[s
 	}
 
 	// Fetch from blockchain
-	nfts, err := m.marketService.GetPlayerNFTs(playerAddress)
+	// The marketService.GetPlayerNFTs method takes an optional specificNftType filter.
+	// This manager method currently doesn't expose that, so passing nil.
+	nfts, err := m.marketService.GetPlayerNFTs(playerAddress, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -315,12 +372,14 @@ func (m *MarketplaceServiceManager) invalidateListingsCache() {
 	m.cacheMutex.Lock()
 	defer m.cacheMutex.Unlock()
 
-	// Remove all listings cache entries
+	// Remove all listings cache entries (could be more specific if keys are well-defined)
+	// Example: iterate and check prefix "listings_" and "marketplace_info"
 	for key := range m.cache {
-		if key == "marketplace_info" ||
-			key[:9] == "listings_" {
+		// A more robust way would be to have predefined cache key prefixes
+		if strings.HasPrefix(key, "listings_") || key == "marketplace_info" {
 			delete(m.cache, key)
 			delete(m.cacheExpiry, key)
+			utils.LogDebugf("MarketplaceManager: Invalidated cache key: %s", key)
 		}
 	}
 }
@@ -334,9 +393,15 @@ func (m *MarketplaceServiceManager) invalidateNFTCache(nftID string) {
 	m.cacheMutex.Lock()
 	defer m.cacheMutex.Unlock()
 
-	cacheKey := fmt.Sprintf("nft_info_%s", nftID)
-	delete(m.cache, cacheKey)
-	delete(m.cacheExpiry, cacheKey)
+	cacheKeyListingInfo := fmt.Sprintf("listing_info_%s", nftID) // Assuming nftID here means listingObjectID for GetListingInfo
+	delete(m.cache, cacheKeyListingInfo)
+	delete(m.cacheExpiry, cacheKeyListingInfo)
+	utils.LogDebugf("MarketplaceManager: Invalidated cache key: %s", cacheKeyListingInfo)
+
+	// If nftID is also used for other specific NFT details (not just listings)
+	// cacheKeyNftDetails := fmt.Sprintf("nft_details_%s", nftID)
+	// delete(m.cache, cacheKeyNftDetails)
+	// delete(m.cacheExpiry, cacheKeyNftDetails)
 }
 
 // GetStats returns service statistics
@@ -362,7 +427,7 @@ func (m *MarketplaceServiceManager) GetStats() map[string]interface{} {
 
 // Close gracefully shuts down the service manager
 func (m *MarketplaceServiceManager) Close() error {
-	log.Println("Shutting down Marketplace Service Manager...")
+	utils.LogInfo("Shutting down Marketplace Service Manager...")
 
 	// Clear caches
 	m.cacheMutex.Lock()

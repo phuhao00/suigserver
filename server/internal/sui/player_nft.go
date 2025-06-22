@@ -3,9 +3,9 @@ package sui
 import (
 	"encoding/json"
 	"fmt"
-	"log"
-
+	// "log" // Will be replaced by utils
 	"github.com/block-vision/sui-go-sdk/models"
+	"github.com/phuhao00/suigserver/server/internal/utils" // For logging
 )
 
 // PlayerNFTService interacts with the Player NFT contract on the Sui blockchain.
@@ -18,16 +18,19 @@ type PlayerNFTService struct {
 }
 
 // NewPlayerNFTService creates a new PlayerNFTService.
-func NewPlayerNFTService(client *SuiClient, packageID, moduleName, adminAddress, adminGasObjID string) *PlayerNFTService {
-	log.Println("Initializing Player NFT Service...")
-	if client == nil {
-		log.Panic("PlayerNFTService: Sui client cannot be nil")
+func NewPlayerNFTService(suiClient *SuiClient, packageID, moduleName, adminAddress, adminGasObjID string) *PlayerNFTService {
+	utils.LogInfo("Initializing Player NFT Service...")
+	if suiClient == nil {
+		utils.LogPanic("PlayerNFTService: SuiClient cannot be nil")
 	}
 	if packageID == "" || moduleName == "" {
-		log.Panic("PlayerNFTService: packageID and moduleName must be provided.")
+		utils.LogPanic("PlayerNFTService: packageID and moduleName must be provided.")
 	}
+	// adminAddress and adminGasObjID are crucial for MintPlayerNFT if it's an admin action.
+	// GetPlayerNFT and UpdatePlayerNFT (if owner-called) might not need them.
+	// Consider validation in methods that specifically require them.
 	return &PlayerNFTService{
-		suiClient:     client,
+		suiClient:     suiClient,
 		packageID:     packageID,
 		moduleName:    moduleName,
 		adminAddress:  adminAddress,  // Required if minting is an admin action
@@ -40,10 +43,22 @@ func NewPlayerNFTService(client *SuiClient, packageID, moduleName, adminAddress,
 // Returns TransactionBlockResponse for subsequent signing and execution.
 func (s *PlayerNFTService) MintPlayerNFT(playerAddress string, initialAttributes map[string]interface{}, gasBudget uint64) (models.TransactionBlockResponse, error) {
 	functionName := "mint_player_nft" // Assumed Move function name for minting a player NFT
-	log.Printf("Preparing to mint Player NFT for address %s by admin %s.", playerAddress, s.adminAddress)
+	utils.LogInfof("PlayerNFTService: Preparing to mint Player NFT for address %s by admin %s. GasObject: %s, GasBudget: %d",
+		playerAddress, s.adminAddress, s.adminGasObjID, gasBudget)
+
+	if s.adminAddress == "" || s.adminGasObjID == "" {
+		errMsg := "adminAddress and adminGasObjID must be configured in PlayerNFTService for minting"
+		utils.LogError("PlayerNFTService: " + errMsg)
+		return models.TransactionBlockResponse{}, fmt.Errorf(errMsg)
+	}
+	if playerAddress == "" {
+		utils.LogError("PlayerNFTService: playerAddress must be provided for MintPlayerNFT")
+		return models.TransactionBlockResponse{}, fmt.Errorf("playerAddress must be provided for MintPlayerNFT")
+	}
 
 	attributesJSON, err := json.Marshal(initialAttributes)
 	if err != nil {
+		utils.LogErrorf("PlayerNFTService: Failed to marshal initialAttributes for player %s: %v", playerAddress, err)
 		return models.TransactionBlockResponse{}, fmt.Errorf("failed to marshal initialAttributes to JSON: %w", err)
 	}
 
@@ -53,10 +68,6 @@ func (s *PlayerNFTService) MintPlayerNFT(playerAddress string, initialAttributes
 		// Any other required args for minting, e.g., character class, starting zone ID, etc.
 	}
 	typeArgs := []string{} // If mint function is generic
-
-	if s.adminAddress == "" || s.adminGasObjID == "" {
-		return models.TransactionBlockResponse{}, fmt.Errorf("adminAddress and adminGasObjID must be configured for minting PlayerNFTs")
-	}
 
 	txBlockResponse, err := s.suiClient.MoveCall(
 		s.adminAddress, // The address performing the mint (e.g., an admin or the system)
@@ -70,22 +81,26 @@ func (s *PlayerNFTService) MintPlayerNFT(playerAddress string, initialAttributes
 	)
 
 	if err != nil {
-		log.Printf("Error preparing MintPlayerNFT transaction for %s: %v", playerAddress, err)
-		return models.TransactionBlockResponse{}, err
+		utils.LogErrorf("PlayerNFTService: Error preparing MintPlayerNFT transaction for %s: %v", playerAddress, err)
+		return models.TransactionBlockResponse{}, fmt.Errorf("MoveCall failed for MintPlayerNFT (player %s): %w", playerAddress, err)
 	}
-	log.Printf("MintPlayerNFT transaction prepared for %s. TxBytes: %s", playerAddress, txBlockResponse.TxBytes)
+	utils.LogInfof("PlayerNFTService: MintPlayerNFT transaction prepared for %s. TxBytes: %s", playerAddress, txBlockResponse.TxBytes)
 	return txBlockResponse, nil
 }
 
 // GetPlayerNFT retrieves details of a Player NFT by its object ID.
 func (s *PlayerNFTService) GetPlayerNFT(nftID string) (models.SuiObjectResponse, error) {
-	log.Printf("Fetching Player NFT with ID %s.", nftID)
+	utils.LogInfof("PlayerNFTService: Fetching Player NFT with ID %s.", nftID)
+	if nftID == "" {
+		utils.LogError("PlayerNFTService: nftID must be provided for GetPlayerNFT")
+		return models.SuiObjectResponse{}, fmt.Errorf("nftID must be provided")
+	}
 	objectData, err := s.suiClient.GetObject(nftID)
 	if err != nil {
-		log.Printf("Error fetching Player NFT object %s from Sui: %v", nftID, err)
-		return models.SuiObjectResponse{}, err
+		utils.LogErrorf("PlayerNFTService: Error fetching Player NFT object %s from Sui: %v", nftID, err)
+		return models.SuiObjectResponse{}, fmt.Errorf("GetObject failed for PlayerNFT %s: %w", nftID, err)
 	}
-	log.Printf("Successfully fetched Player NFT object %s.", nftID)
+	utils.LogInfof("PlayerNFTService: Successfully fetched Player NFT object %s.", nftID)
 	return objectData, nil
 }
 
@@ -94,10 +109,23 @@ func (s *PlayerNFTService) GetPlayerNFT(nftID string) (models.SuiObjectResponse,
 // Returns TransactionBlockResponse for subsequent signing and execution.
 func (s *PlayerNFTService) UpdatePlayerNFT(nftID string, playerAddress string, updates map[string]interface{}, playerGasObjID string, gasBudget uint64) (models.TransactionBlockResponse, error) {
 	functionName := "update_player_nft" // Assumed Move function name for updating player NFT
-	log.Printf("Preparing to update Player NFT %s by owner %s with data %v.", nftID, playerAddress, updates)
+	utils.LogInfof("PlayerNFTService: Preparing to update Player NFT %s by owner %s with data %v. GasObject: %s, GasBudget: %d",
+		nftID, playerAddress, updates, playerGasObjID, gasBudget)
+
+	if nftID == "" || playerAddress == "" || playerGasObjID == "" {
+		errMsg := "nftID, playerAddress, and playerGasObjID must be provided for UpdatePlayerNFT"
+		utils.LogError("PlayerNFTService: " + errMsg)
+		return models.TransactionBlockResponse{}, fmt.Errorf(errMsg)
+	}
+	if len(updates) == 0 {
+		utils.LogWarn("PlayerNFTService: UpdatePlayerNFT called with empty updates map.")
+		// Depending on contract logic, this might be an error or a no-op.
+		// For now, proceed, but contract might require non-empty updates.
+	}
 
 	updatesJSON, err := json.Marshal(updates)
 	if err != nil {
+		utils.LogErrorf("PlayerNFTService: Failed to marshal updates for NFT %s: %v", nftID, err)
 		return models.TransactionBlockResponse{}, fmt.Errorf("failed to marshal updates to JSON: %w", err)
 	}
 
@@ -120,9 +148,9 @@ func (s *PlayerNFTService) UpdatePlayerNFT(nftID string, playerAddress string, u
 	)
 
 	if err != nil {
-		log.Printf("Error preparing UpdatePlayerNFT transaction for %s: %v", nftID, err)
-		return models.TransactionBlockResponse{}, err
+		utils.LogErrorf("PlayerNFTService: Error preparing UpdatePlayerNFT transaction for %s: %v", nftID, err)
+		return models.TransactionBlockResponse{}, fmt.Errorf("MoveCall failed for UpdatePlayerNFT (NFT %s): %w", nftID, err)
 	}
-	log.Printf("UpdatePlayerNFT transaction prepared for %s. TxBytes: %s", nftID, txBlockResponse.TxBytes)
+	utils.LogInfof("PlayerNFTService: UpdatePlayerNFT transaction prepared for %s. TxBytes: %s", nftID, txBlockResponse.TxBytes)
 	return txBlockResponse, nil
 }

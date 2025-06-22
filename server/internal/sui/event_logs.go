@@ -3,10 +3,11 @@ package sui
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	// "log" // Will be replaced by utils
 	"strconv"
 
 	"github.com/block-vision/sui-go-sdk/models"
+	"github.com/phuhao00/suigserver/server/internal/utils" // For logging
 )
 
 // GameEventData defines a structure for game events to be logged.
@@ -30,13 +31,16 @@ type EventLogSuiService struct {
 }
 
 // NewEventLogSuiService creates a new EventLogSuiService.
-func NewEventLogSuiService(client *SuiClient, packageID, moduleName, senderAddress, gasObjectID string) *EventLogSuiService {
-	log.Println("Initializing Event Log Sui Service...")
-	if client == nil {
-		log.Panic("EventLogSuiService: Sui client cannot be nil")
+func NewEventLogSuiService(suiClient *SuiClient, packageID, moduleName, senderAddress, gasObjectID string) *EventLogSuiService {
+	utils.LogInfo("Initializing Event Log Sui Service...")
+	if suiClient == nil {
+		utils.LogPanic("EventLogSuiService: SuiClient cannot be nil")
 	}
+	// packageID, moduleName, senderAddress, gasObjectID can be empty if only QueryGameEvents is used.
+	// However, if LogGameEventViaCall is a primary function, these should be validated.
+	// For now, allow them to be potentially empty, LogGameEventViaCall will validate if needed.
 	return &EventLogSuiService{
-		suiClient:     client,
+		suiClient:     suiClient,
 		packageID:     packageID,
 		moduleName:    moduleName,
 		senderAddress: senderAddress,
@@ -46,16 +50,27 @@ func NewEventLogSuiService(client *SuiClient, packageID, moduleName, senderAddre
 
 // LogGameEventViaCall prepares a transaction to record a game event by calling a Move function.
 // Returns TransactionBlockResponse for subsequent signing and execution.
+// This uses the service's configured senderAddress and gasObjectID.
 func (s *EventLogSuiService) LogGameEventViaCall(event GameEventData, gasBudget uint64) (models.TransactionBlockResponse, error) {
 	functionName := "log_custom_event" // Example Move function name
-	log.Printf("Preparing to log game event via Move call: Type '%s', Creator: %s", event.EventType, event.EventCreator)
+	utils.LogInfof("EventLogSuiService: Preparing to log game event via Move call: Type '%s', Creator: %s. GasBudget: %d",
+		event.EventType, event.EventCreator, gasBudget)
 
 	if s.packageID == "" || s.moduleName == "" || s.senderAddress == "" || s.gasObjectID == "" {
-		return models.TransactionBlockResponse{}, fmt.Errorf("missing packageID, moduleName, senderAddress, or gasObjectID for LogGameEventViaCall")
+		errMsg := "missing packageID, moduleName, senderAddress, or gasObjectID for LogGameEventViaCall in EventLogSuiService config"
+		utils.LogError("EventLogSuiService: " + errMsg)
+		return models.TransactionBlockResponse{}, fmt.Errorf(errMsg)
 	}
+	if event.EventType == "" || event.EventCreator == "" {
+		errMsg := "EventType and EventCreator must be provided in GameEventData"
+		utils.LogError("EventLogSuiService: " + errMsg)
+		return models.TransactionBlockResponse{}, fmt.Errorf(errMsg)
+	}
+
 
 	payloadJSON, err := json.Marshal(event.Payload)
 	if err != nil {
+		utils.LogErrorf("EventLogSuiService: Failed to marshal event payload for event type %s: %v", event.EventType, err)
 		return models.TransactionBlockResponse{}, fmt.Errorf("failed to marshal event payload: %w", err)
 	}
 
@@ -80,11 +95,11 @@ func (s *EventLogSuiService) LogGameEventViaCall(event GameEventData, gasBudget 
 	)
 
 	if err != nil {
-		log.Printf("Error preparing LogGameEvent transaction (Type: %s): %v", event.EventType, err)
-		return models.TransactionBlockResponse{}, err
+		utils.LogErrorf("EventLogSuiService: Error preparing LogGameEvent transaction (Type: %s): %v", event.EventType, err)
+		return models.TransactionBlockResponse{}, fmt.Errorf("MoveCall failed for LogGameEvent (Type: %s): %w", event.EventType, err)
 	}
 
-	log.Printf("LogGameEvent transaction prepared (Type: %s). TxBytes: %s",
+	utils.LogInfof("EventLogSuiService: LogGameEvent transaction prepared (Type: %s). TxBytes: %s",
 		event.EventType, txBlockResponse.TxBytes)
 	return txBlockResponse, nil
 }
@@ -98,61 +113,46 @@ func (s *EventLogSuiService) QueryGameEvents(
 	limit uint64,
 	descendingOrder bool,
 ) (models.SuiQueryEventsResponse, error) {
-	log.Printf("Querying game events: Filter='%s', Limit=%d, Descending=%t, CursorTx=%v, CursorSeq=%v",
+	utils.LogInfof("EventLogSuiService: Querying game events: Filter='%s', Limit=%d, Descending=%t, CursorTx=%v, CursorSeq=%v",
 		eventTypeFilter, limit, descendingOrder, cursorTxDigest, cursorEventSeq)
+
+	if eventTypeFilter == "" {
+		utils.LogError("EventLogSuiService: eventTypeFilter must be provided for QueryGameEvents")
+		return models.SuiQueryEventsResponse{}, fmt.Errorf("eventTypeFilter must be provided")
+	}
 
 	query := models.EventFilter{
 		MoveEventType: &eventTypeFilter,
 		// Other filters like Sender, TimeRange can be added to models.EventFilter if needed
 	}
 
-	var actualCursor *models.EventId
+	// Construct string cursor as expected by client.QueryEvents, which handles parsing.
+	var cursorStrPointer *string
 	if cursorTxDigest != nil && cursorEventSeq != nil {
-		actualCursor = &models.EventId{
-			TxDigest: *cursorTxDigest,
-			EventSeq: *cursorEventSeq,
-		}
+		str := fmt.Sprintf("%s:%d", *cursorTxDigest, *cursorEventSeq)
+		cursorStrPointer = &str
+		utils.LogDebugf("EventLogSuiService: Using cursor string for query: %s", str)
 	}
 
-	if limit == 0 {
-		limit = 50 // Default limit
-	}
-
-	// The client.QueryEvents was already updated to take *string for cursor,
-	// but sui-go-sdk takes *models.EventId. We need to adjust the client.go or here.
-	// For now, let's assume client.QueryEvents is called directly if it was adapted,
-	// or we pass the structured cursor if we are calling the SDK method directly here.
-	// The current plan step is to update THIS file (event_logs.go) to use the SDK.
-	// So, we should use the SDK's QueryEvents method signature.
-
-	// The `s.suiClient.QueryEvents` method in `client.go` was refactored to accept `models.EventFilter`
-	// and a string cursor. This means `client.go` needs to parse the string cursor into `models.EventId`.
-	// Let's construct the string cursor as expected by our refactored `client.go`'s `QueryEvents` method.
-	var cursorStr *string
-	if actualCursor != nil {
-		str := fmt.Sprintf("%s:%d", actualCursor.TxDigest, actualCursor.EventSeq)
-		cursorStr = &str
-	}
-
-	// We need to pass a pointer to limit for the client.QueryEvents method
-	var limitPtr *uint64
+	var actualLimit uint64 = 50 // Default limit for query
 	if limit > 0 {
-		limitPtr = &limit
+		actualLimit = limit
 	}
+	limitPtr := &actualLimit
 
-	resp, err := s.suiClient.QueryEvents(query, cursorStr, limitPtr, descendingOrder)
+
+	resp, err := s.suiClient.QueryEvents(query, cursorStrPointer, limitPtr, descendingOrder)
 	if err != nil {
-		log.Printf("Error querying events (Filter: %s): %v", eventTypeFilter, err)
-		return models.SuiQueryEventsResponse{}, err
+		utils.LogErrorf("EventLogSuiService: Error querying events (Filter: %s): %v", eventTypeFilter, err)
+		return models.SuiQueryEventsResponse{}, fmt.Errorf("QueryEvents failed for filter %s: %w", eventTypeFilter, err)
 	}
 
-	log.Printf("Successfully queried events (Filter: %s). Found: %d events. HasNextPage: %t",
+	utils.LogInfof("EventLogSuiService: Successfully queried events (Filter: %s). Found: %d events. HasNextPage: %t",
 		eventTypeFilter, len(resp.Data), resp.HasNextPage)
 
-	// Example of accessing next cursor from SDK response
-	// if resp.HasNextPage && resp.NextCursor != nil {
-	// 	log.Printf("Next cursor for pagination: TxDigest=%s, EventSeq=%d", resp.NextCursor.TxDigest, resp.NextCursor.EventSeq)
-	// }
+	if resp.HasNextPage && resp.NextCursor != nil {
+		utils.LogDebugf("EventLogSuiService: Next cursor for pagination: TxDigest=%s, EventSeq=%d", resp.NextCursor.TxDigest, resp.NextCursor.EventSeq)
+	}
 
 	return resp, nil
 }
